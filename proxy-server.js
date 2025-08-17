@@ -14,7 +14,7 @@ const GAS_URL =
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
-// Count only
+// ✅ Count only
 app.get("/today-count", async (_req, res) => {
   try {
     const r = await fetch(`${GAS_URL}?action=todayCount`);
@@ -29,7 +29,7 @@ app.get("/today-count", async (_req, res) => {
   }
 });
 
-// Entries / filters / updateStatus passthrough
+// ✅ Entries / filters passthrough
 app.get("/entries", async (req, res) => {
   try {
     const qs = req.originalUrl.split("?")[1] || "";
@@ -46,12 +46,12 @@ app.get("/entries", async (req, res) => {
   }
 });
 
-// Save form (POST)
+// ✅ Save form (POST with text/plain to avoid preflight)
 app.post("/save", async (req, res) => {
   try {
     const r = await fetch(GAS_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // ✅ text/plain instead of JSON
       body: JSON.stringify(req.body),
     });
     const text = await r.text();
