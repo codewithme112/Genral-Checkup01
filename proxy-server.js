@@ -10,7 +10,7 @@ app.use(morgan("dev"));
 
 const GAS_URL =
   process.env.GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbyXx8XuwuLRaSA0yO2TZxyOnSuK5P8loxv6EhYVvXMn8lk0Uj64hezgx-2CVcyUmWzacA/exec";
+  "https://script.google.com/macros/s/AKfycbwy-Gc6KAqtwiaxe5O17rqU6baNZ2xV_nXozZGxKNScinNFHBbQIf7qEYFcvfKZTIRu8g/exec";
 
 app.get("/health", (_, res) => res.json({ ok: true }));
 
