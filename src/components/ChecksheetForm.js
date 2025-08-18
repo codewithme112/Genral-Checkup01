@@ -30,12 +30,21 @@ const checklistLabels = [
   "लोड झेलने वाले जोइंट्स की ग्रेसिंग जांचें"
 ];
 
-// Helper to format datetime to "yyyy-MM-ddTHH:mm:ss"
-function formatDateTime(dateObj) {
-  return dateObj.toISOString().slice(0, 19); // "2025-08-14T14:30:00"
+// Helper to format datetime for submission (IST ISO)
+function getISTISOString(dateObj) {
+  const utc = dateObj.getTime() + dateObj.getTimezoneOffset() * 60000;
+  const istOffset = 5.5 * 60 * 60000;
+  const istDate = new Date(utc + istOffset);
+
+  const year = istDate.getFullYear();
+  const month = (istDate.getMonth() + 1).toString().padStart(2, '0');
+  const day = istDate.getDate().toString().padStart(2, '0');
+  const hours = istDate.getHours().toString().padStart(2, '0');
+  const minutes = istDate.getMinutes().toString().padStart(2, '0');
+  const seconds = istDate.getSeconds().toString().padStart(2, '0');
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
-
-
 
 const ChecksheetForm = () => {
   const [formData, setFormData] = useState({
@@ -55,7 +64,7 @@ const ChecksheetForm = () => {
     const now = new Date();
     setFormData(prev => ({
       ...prev,
-      datetime: formatDateTime(now)
+      datetime: getISTISOString(now)
     }));
 
     fetchTodayCount().then(setTodayCount);
@@ -79,16 +88,15 @@ const ChecksheetForm = () => {
     if (submitting) return;
     setSubmitting(true);
 
-    // Ensure Other Issue defaults to "ठीक है"
     const finalFormData = {
       ...formData,
       otherIssue:
         formData.otherIssue && formData.otherIssue.trim() !== ''
           ? formData.otherIssue
           : 'ठीक है',
+      datetime: getISTISOString(new Date()) // automatic IST adjustment
     };
 
-    // Convert to x-www-form-urlencoded
     const params = new URLSearchParams();
     params.append("datetime", finalFormData.datetime);
     params.append("registration", finalFormData.registration);
@@ -107,7 +115,7 @@ const ChecksheetForm = () => {
       if (response.ok) {
         alert('✅ सेव हो गया!');
         setFormData({
-          datetime: formatDateTime(new Date()),
+          datetime: getISTISOString(new Date()),
           registration: '',
           kilometers: '',
           model: '',
@@ -167,10 +175,11 @@ const ChecksheetForm = () => {
           required
         />
 
-       
-<div>
-  <Clock />
-</div>
+        {/* Live Clock */}
+        <div>
+          <Clock />
+        </div>
+
         {checklistLabels.map((label, index) => (
           <div
             key={index}
