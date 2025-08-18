@@ -1,70 +1,111 @@
+// server.js
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import morgan from "morgan";
+import dotenv from "dotenv";
+
+// Load environment variables from .env
+dotenv.config();
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: "http://localhost:3000" }));
+
+// ✅ CORS allowed origin (Frontend safe fallback)
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
 app.use(morgan("dev"));
 
-const GAS_URL =
-  process.env.GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbwy-Gc6KAqtwiaxe5O17rqU6baNZ2xV_nXozZGxKNScinNFHBbQIf7qEYFcvfKZTIRu8g/exec";
+// ✅ GAS URL from env (mandatory)
+const GAS_URL = process.env.GAS_URL;
+if (!GAS_URL) {
+  console.error("❌ GAS_URL is not set in .env file!");
+  process.exit(1);
+}
 
-app.get("/health", (_, res) => res.json({ ok: true }));
+// ---------------- Routes ----------------
 
-// ✅ Count only
+// Health check
+app.get("/health", (_, res) => {
+  res.json({
+    ok: true,
+    GAS_URL,
+    frontend: process.env.FRONTEND_URL || "http://localhost:3000",
+  });
+});
+
+// ✅ Get today's count
 app.get("/today-count", async (_req, res) => {
   try {
     const r = await fetch(`${GAS_URL}?action=todayCount`);
     const text = await r.text();
+
     try {
       res.json(JSON.parse(text));
     } catch {
+      console.error("❌ Invalid JSON from GAS (/today-count):", text);
       res.status(502).json({ error: "Invalid JSON from GAS", raw: text });
     }
   } catch (err) {
+    console.error("❌ Error in /today-count:", err.message);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-// ✅ Entries / filters passthrough
+// ✅ Get entries (with query passthrough)
 app.get("/entries", async (req, res) => {
   try {
-    const qs = req.originalUrl.split("?")[1] || "";
+    const qs = req.originalUrl.includes("?")
+      ? req.originalUrl.split("?")[1]
+      : "";
     const url = `${GAS_URL}${qs ? `?${qs}` : ""}`;
+
     const r = await fetch(url);
     const text = await r.text();
+
     try {
       res.json(JSON.parse(text));
     } catch {
+      console.error("❌ Invalid JSON from GAS (/entries):", text);
       res.status(502).json({ error: "Invalid JSON from GAS", raw: text });
     }
   } catch (err) {
+    console.error("❌ Error in /entries:", err.message);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-// ✅ Save form (POST with text/plain to avoid preflight)
+// ✅ Save form data
 app.post("/save", async (req, res) => {
   try {
     const r = await fetch(GAS_URL, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // ✅ text/plain instead of JSON
+      headers: { "Content-Type": "application/json" }, // ✅ fixed header
       body: JSON.stringify(req.body),
     });
+
     const text = await r.text();
+
     try {
       res.json(JSON.parse(text));
     } catch {
+      console.error("❌ Invalid JSON from GAS (/save):", text);
       res.status(502).json({ error: "Invalid JSON from GAS", raw: text });
     }
   } catch (err) {
+    console.error("❌ Error in /save:", err.message);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-app.listen(5050, () =>
-  console.log("✅ Proxy running on http://localhost:5050")
+// ---------------- Server start ----------------
+const PORT = process.env.PORT || 5050;
+app.listen(PORT, () =>
+  console.log(`✅ Proxy running at http://localhost:${PORT}`)
 );

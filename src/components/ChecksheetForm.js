@@ -29,12 +29,10 @@ const checklistLabels = [
   "लोड झेलने वाले जोइंट्स की ग्रेसिंग जांचें"
 ];
 
-// Helper to format datetime to "dd/MM/yyyy HH:mm:ss"
+// Helper to format datetime to "yyyy-MM-ddTHH:mm:ss"
 function formatDateTime(dateObj) {
-  // Send in ISO format: yyyy-MM-ddTHH:mm:ss
-  return dateObj.toISOString().slice(0,19); // "2025-08-14T14:30:00"
+  return dateObj.toISOString().slice(0, 19); // "2025-08-14T14:30:00"
 }
-
 
 const ChecksheetForm = () => {
   const [formData, setFormData] = useState({
@@ -81,16 +79,26 @@ const ChecksheetForm = () => {
     // Ensure Other Issue defaults to "ठीक है"
     const finalFormData = {
       ...formData,
-      otherIssue: formData.otherIssue && formData.otherIssue.trim() !== '' 
-        ? formData.otherIssue 
-        : 'ठीक है'
+      otherIssue:
+        formData.otherIssue && formData.otherIssue.trim() !== ''
+          ? formData.otherIssue
+          : 'ठीक है',
     };
+
+    // Convert to x-www-form-urlencoded
+    const params = new URLSearchParams();
+    params.append("datetime", finalFormData.datetime);
+    params.append("registration", finalFormData.registration);
+    params.append("kilometers", finalFormData.kilometers);
+    params.append("model", finalFormData.model);
+    params.append("otherIssue", finalFormData.otherIssue);
+    params.append("items", JSON.stringify(finalFormData.items));
 
     try {
       const response = await fetch(SAVE_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalFormData),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
       });
 
       if (response.ok) {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import PrintableEntry from "./PrintableEntry.js";
-import { ENTRIES_URL } from "../config.js";
+import { ENTRIES_URL, UPDATE_STATUS_URL } from "../config.js";
 
 const checklistLabels = [
   "सर्विस हिस्ट्री देखें और ग्राहक को सुझाव दें",
@@ -29,8 +29,7 @@ const checklistLabels = [
   "अन्य समस्या",
 ];
 
-const FINAL_URL = ENTRIES_URL;
-
+// Format helpers
 const formatDate = (dateTimeStr) => {
   if (!dateTimeStr) return "";
   const d = new Date(dateTimeStr);
@@ -42,7 +41,20 @@ const formatTime = (dateTimeStr) => {
   const d = new Date(dateTimeStr);
   return isNaN(d)
     ? dateTimeStr
-    : d.toLocaleTimeString("hi-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    : d.toLocaleTimeString("hi-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+};
+
+// Build today's date in dd-mm-yyyy
+const getTodayDateString = () => {
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, "0");
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const yyyy = today.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
 };
 
 const ViewEntries = () => {
@@ -54,11 +66,13 @@ const ViewEntries = () => {
   const [customerDecisions, setCustomerDecisions] = useState({});
   const [repairStatuses, setRepairStatuses] = useState({});
 
-  const fetchEntries = async (query) => {
+  // ---------------- Fetch Entries ----------------
+  const fetchEntries = async (queryUrl) => {
     try {
       setLoading(true);
-      const res = await fetch(query);
+      const res = await fetch(queryUrl);
       const data = await res.json();
+
       setEntries(
         Array.isArray(data)
           ? data
@@ -74,23 +88,26 @@ const ViewEntries = () => {
     }
   };
 
-  // Load only today's entries on first load
+  // Load only today's entries initially
   useEffect(() => {
-    fetchEntries(`${FINAL_URL}?type=today`);
+    fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
   }, []);
 
+  // ---------------- Search Handler ----------------
   const handleSearch = () => {
     if (searchText.trim()) {
-      fetchEntries(`${FINAL_URL}?search=${encodeURIComponent(searchText.trim())}`);
+      fetchEntries(
+        `${ENTRIES_URL}?search=${encodeURIComponent(searchText.trim())}`
+      );
     } else if (selectedDate) {
-      // selectedDate is yyyy-mm-dd from <input type="date">
       const [yyyy, mm, dd] = selectedDate.split("-");
-      fetchEntries(`${FINAL_URL}?date=${dd}-${mm}-${yyyy}`); // dashes; GAS also accepts slashes now
+      fetchEntries(`${ENTRIES_URL}?date=${dd}-${mm}-${yyyy}`);
     } else {
-      fetchEntries(`${FINAL_URL}?type=today`);
+      fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
     }
   };
 
+  // ---------------- Render Summary ----------------
   const renderSummary = (items, otherIssue) => {
     if (!Array.isArray(items)) {
       return <span style={{ color: "red" }}>❌ डेटा उपलब्ध नहीं</span>;
@@ -98,7 +115,9 @@ const ViewEntries = () => {
     const notOk = items
       .map((item, i) =>
         item?.status === "नहीं"
-          ? `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${item?.remark || ""}`
+          ? `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${
+              item?.remark || ""
+            }`
           : null
       )
       .filter(Boolean);
@@ -119,6 +138,7 @@ const ViewEntries = () => {
     );
   };
 
+  // ---------------- State Change Handlers ----------------
   const handleCustomerDecisionChange = (regNo, value) => {
     setCustomerDecisions((prev) => ({ ...prev, [regNo]: value }));
     if (value === "Denied") {
@@ -132,23 +152,30 @@ const ViewEntries = () => {
     setRepairStatuses((prev) => ({ ...prev, [regNo]: value }));
   };
 
+  // ---------------- Update Status ----------------
   const handleUpdateStatus = async (entry) => {
     const customerDecision = customerDecisions[entry.registration] || "Pending";
     const repairStatus = repairStatuses[entry.registration] || "Pending";
 
     try {
       setLoading(true);
-      const res = await fetch(
-        `${FINAL_URL}?action=updateStatus&registration=${encodeURIComponent(
-          entry.registration
-        )}&customerDecision=${encodeURIComponent(
-          customerDecision
-        )}&repairStatus=${encodeURIComponent(repairStatus)}`
-      );
+      const res = await fetch(UPDATE_STATUS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          action: "updateStatus",
+          registration: entry.registration,
+          customerDecision,
+          repairStatus,
+        }),
+      });
+
       const data = await res.json();
       if (data.success) {
         alert("✅ Status updated successfully!");
-        fetchEntries(`${FINAL_URL}?type=today`);
+        fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
       } else {
         alert("❌ Failed to update status.");
       }
@@ -160,6 +187,7 @@ const ViewEntries = () => {
     }
   };
 
+  // ---------------- JSX ----------------
   return (
     <div className="entries-card-list">
       <h2 style={{ textAlign: "center" }}>📋 सभी चेकशीट एंट्री</h2>
@@ -205,7 +233,9 @@ const ViewEntries = () => {
               <label>Customer Decision: </label>
               <select
                 value={customerDecisions[entry.registration] || "Pending"}
-                onChange={(e) => handleCustomerDecisionChange(entry.registration, e.target.value)}
+                onChange={(e) =>
+                  handleCustomerDecisionChange(entry.registration, e.target.value)
+                }
               >
                 <option value="Pending">Pending</option>
                 <option value="Accepted">Accepted</option>
@@ -217,7 +247,9 @@ const ViewEntries = () => {
               <label>Repair Status: </label>
               <select
                 value={repairStatuses[entry.registration] || "Pending"}
-                onChange={(e) => handleRepairStatusChange(entry.registration, e.target.value)}
+                onChange={(e) =>
+                  handleRepairStatusChange(entry.registration, e.target.value)
+                }
                 disabled={customerDecisions[entry.registration] !== "Accepted"}
               >
                 <option value="Pending">Pending</option>
@@ -242,19 +274,30 @@ const ViewEntries = () => {
               </button>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", marginTop: "10px" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "10px",
+                marginTop: "10px",
+              }}
+            >
               <button onClick={() => setSelectedEntry(entry)}>📄 View Report</button>
             </div>
           </div>
         ))}
       </div>
 
+      {/* Modal Print */}
       {selectedEntry && (
         <div className="overlay">
           <div className="modal">
             <button onClick={() => setSelectedEntry(null)}>❌ बंद करें</button>
             <div className="print-area">
-              <PrintableEntry entry={selectedEntry} checklistLabels={checklistLabels} />
+              <PrintableEntry
+                entry={selectedEntry}
+                checklistLabels={checklistLabels}
+              />
             </div>
             <button onClick={() => window.print()}>🖨️ प्रिंट</button>
           </div>
