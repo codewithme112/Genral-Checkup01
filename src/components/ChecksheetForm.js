@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchTodayCount } from '../utils/fetchTodayCount.js';
 import { SAVE_URL } from '../config.js';
+import Clock from '../utils/Features/Clock.js';
 
 // Checklist labels
 const checklistLabels = [
@@ -33,6 +34,8 @@ const checklistLabels = [
 function formatDateTime(dateObj) {
   return dateObj.toISOString().slice(0, 19); // "2025-08-14T14:30:00"
 }
+
+
 
 const ChecksheetForm = () => {
   const [formData, setFormData] = useState({
@@ -164,10 +167,10 @@ const ChecksheetForm = () => {
           required
         />
 
-        <p style={{ fontWeight: 'bold', border: '1px solid white' }}>
-          📅 दिनांक और समय: {formData.datetime}
-        </p>
-
+       
+<div>
+  <Clock />
+</div>
         {checklistLabels.map((label, index) => (
           <div
             key={index}
