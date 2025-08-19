@@ -259,7 +259,7 @@ const ViewEntries = () => {
               >
                 <option value="Pending">Pending</option>
                 <option value="In Progress">In Progress</option>
-                <option value="Completed">Completed</option>
+                <option value="Done">Completed</option>
                 <option value="Denied">Denied</option>
               </select>
             </div>
