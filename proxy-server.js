@@ -14,7 +14,7 @@ app.use(express.json());
 // ✅ CORS allowed origin (Frontend safe fallback)
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: [process.env.FRONTEND_URL || "http://localhost:3000", "http://localhost:5051"],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
@@ -83,15 +83,16 @@ app.get("/entries", async (req, res) => {
 
 // ✅ Save form data
 app.post("/save", async (req, res) => {
+  console.log("➡️ Received from frontend:", req.body);
   try {
     const r = await fetch(GAS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" }, // ✅ fixed header
       body: JSON.stringify(req.body),
     });
-
+    
     const text = await r.text();
-
+    
     try {
       res.json(JSON.parse(text));
     } catch {
@@ -103,6 +104,7 @@ app.post("/save", async (req, res) => {
     res.status(500).json({ status: "error", message: err.message });
   }
 });
+
 
 // ---------------- Server start ----------------
 const PORT = process.env.PORT || 5050;

@@ -1,3 +1,4 @@
+// ViewEntries.js
 import React, { useEffect, useState } from "react";
 import PrintableEntry from "./PrintableEntry.js";
 import { ENTRIES_URL, UPDATE_STATUS_URL } from "../config.js";
@@ -112,6 +113,7 @@ const ViewEntries = () => {
     if (!Array.isArray(items)) {
       return <span style={{ color: "red" }}>❌ डेटा उपलब्ध नहीं</span>;
     }
+
     const notOk = items
       .map((item, i) =>
         item?.status === "नहीं"
@@ -122,8 +124,11 @@ const ViewEntries = () => {
       )
       .filter(Boolean);
 
+    // अन्य समस्या चेक
     if (otherIssue && typeof otherIssue === "string" && otherIssue.trim()) {
-      notOk.push(`23. अन्य समस्या — ${otherIssue}`);
+      if (otherIssue.trim() !== "ठीक है") {
+        notOk.push(`23. अन्य समस्या — ${otherIssue}`);
+      }
     }
 
     return notOk.length === 0 ? (
@@ -133,7 +138,7 @@ const ViewEntries = () => {
         {notOk.map((item, i) => (
           <div key={i}>❌ {item}</div>
         ))}
-        <div>✅ Other All OK</div>
+        <div style={{ color: "black" }}>✅ Other All OK</div>
       </div>
     );
   };
