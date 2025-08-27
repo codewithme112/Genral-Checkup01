@@ -69,25 +69,40 @@ const ViewEntries = () => {
 
   // ---------------- Fetch Entries ----------------
   const fetchEntries = async (queryUrl) => {
-    try {
-      setLoading(true);
-      const res = await fetch(queryUrl);
-      const data = await res.json();
+  try {
+    setLoading(true);
+    const res = await fetch(queryUrl);
+    const data = await res.json();
 
-      setEntries(
-        Array.isArray(data)
-          ? data
-          : Array.isArray(data.entries)
-          ? data.entries
-          : []
-      );
-    } catch (err) {
-      console.error("❌ Fetch error:", err);
-      alert("नेटवर्क समस्या! कृपया बाद में प्रयास करें।");
-    } finally {
-      setLoading(false);
-    }
-  };
+    const fetchedEntries = Array.isArray(data)
+      ? data
+      : Array.isArray(data.entries)
+      ? data.entries
+      : [];
+
+    setEntries(fetchedEntries);
+
+    // 🔹 Initialize decisions & statuses from backend
+    const initDecisions = {};
+    const initStatuses = {};
+
+    fetchedEntries.forEach((entry) => {
+      initDecisions[entry.registration] =
+        entry.customerDecision || "Pending";
+      initStatuses[entry.registration] =
+        entry.repairStatus || "Pending";
+    });
+
+    setCustomerDecisions(initDecisions);
+    setRepairStatuses(initStatuses);
+  } catch (err) {
+    console.error("❌ Fetch error:", err);
+    alert("नेटवर्क समस्या! कृपया बाद में प्रयास करें।");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Load only today's entries initially
   useEffect(() => {
