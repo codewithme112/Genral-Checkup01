@@ -138,7 +138,7 @@ const ChecksheetForm = () => {
 
   return (
     <div className="container">
-      <h2 style={{ textAlign: 'center' }}>🔧 जनरल चेकअप फॉर्सट</h2>
+      <h2 style={{ textAlign: 'center' }}>🔧 जनरल चेकअप फॉर्म</h2>
       <p>आज की कुल एंट्री: <strong>{todayCount}</strong></p>
 
       <form onSubmit={handleSubmit}>
