@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchTodayCount } from '../utils/fetchTodayCount.js';
-import { SAVE_URL } from '../config.js';
+import config, { SAVE_URL } from '../config.js';
 import Clock from '../utils/Features/Clock.js';
 
 // Checklist labels
@@ -108,8 +108,8 @@ const ChecksheetForm = () => {
     try {
       const response = await fetch(SAVE_URL, {
         method: 'POST',
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(finalFormData),
+        headers: { "Content-Type": config.isDev ? "application/json" : "application/x-www-form-urlencoded" },
+        body: config.isDev ? JSON.stringify(finalFormData) : params.toString(),
       });
 
       if (response.ok) {
