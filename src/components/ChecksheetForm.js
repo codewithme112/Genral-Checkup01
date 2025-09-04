@@ -108,8 +108,8 @@ const ChecksheetForm = () => {
     try {
       const response = await fetch(SAVE_URL, {
         method: 'POST',
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalFormData),
       });
 
       if (response.ok) {
