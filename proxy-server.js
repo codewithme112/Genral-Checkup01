@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
@@ -90,9 +89,9 @@ app.post("/save", async (req, res) => {
       headers: { "Content-Type": "application/json" }, // ✅ fixed header
       body: JSON.stringify(req.body),
     });
-    
+
     const text = await r.text();
-    
+
     try {
       res.json(JSON.parse(text));
     } catch {
@@ -105,6 +104,33 @@ app.post("/save", async (req, res) => {
   }
 });
 
+// ✅ Update Resolution
+app.post("/update-resolution", async (req, res) => {
+  console.log("➡️ Resolution update request:", req.body);
+  try {
+    const r = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "updateResolution",
+        registration: req.body.registration,
+        itemIndex: req.body.itemIndex,
+        resolution: req.body.resolution,
+      }),
+    });
+
+    const text = await r.text();
+    try {
+      res.json(JSON.parse(text));
+    } catch {
+      console.error("❌ Invalid JSON from GAS (/update-resolution):", text);
+      res.status(502).json({ error: "Invalid JSON from GAS", raw: text });
+    }
+  } catch (err) {
+    console.error("❌ Error in /update-resolution:", err.message);
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
 
 // ---------------- Server start ----------------
 const PORT = process.env.PORT || 5050;

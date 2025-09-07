@@ -1,7 +1,7 @@
 // ViewEntries.js
 import React, { useEffect, useState } from "react";
 import PrintableEntry from "./PrintableEntry.js";
-import { ENTRIES_URL, UPDATE_STATUS_URL } from "../config.js";
+import { ENTRIES_URL, UPDATE_RESOLUTION_URL } from "../config.js";
 
 const checklistLabels = [
   "सर्विस हिस्ट्री देखें और ग्राहक को सुझाव दें",
@@ -49,64 +49,42 @@ const formatTime = (dateTimeStr) => {
       });
 };
 
-// Build today's date in dd-mm-yyyy
-const getTodayDateString = () => {
-  const today = new Date();
-  const dd = String(today.getDate()).padStart(2, "0");
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const yyyy = today.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-};
-
 const ViewEntries = () => {
   const [entries, setEntries] = useState([]);
   const [searchText, setSearchText] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [customerDecisions, setCustomerDecisions] = useState({});
-  const [repairStatuses, setRepairStatuses] = useState({});
 
   // ---------------- Fetch Entries ----------------
   const fetchEntries = async (queryUrl) => {
-  try {
-    setLoading(true);
-    const res = await fetch(queryUrl);
-    const data = await res.json();
+    try {
+      setLoading(true);
+      const res = await fetch(queryUrl);
+      const data = await res.json();
 
-    const fetchedEntries = Array.isArray(data)
-      ? data
-      : Array.isArray(data.entries)
-      ? data.entries
-      : [];
+      const fetchedEntries = Array.isArray(data)
+        ? data
+        : Array.isArray(data.entries)
+        ? data.entries
+        : [];
 
-    setEntries(fetchedEntries);
-
-    // 🔹 Initialize decisions & statuses from backend
-    const initDecisions = {};
-    const initStatuses = {};
-
-    fetchedEntries.forEach((entry) => {
-      initDecisions[entry.registration] =
-        entry.customerDecision || "Pending";
-      initStatuses[entry.registration] =
-        entry.repairStatus || "Pending";
-    });
-
-    setCustomerDecisions(initDecisions);
-    setRepairStatuses(initStatuses);
-  } catch (err) {
-    console.error("❌ Fetch error:", err);
-    alert("नेटवर्क समस्या! कृपया बाद में प्रयास करें।");
-  } finally {
-    setLoading(false);
-  }
-};
-
+      setEntries(fetchedEntries);
+    } catch (err) {
+      console.error("❌ Fetch error:", err);
+      alert("नेटवर्क समस्या! कृपया बाद में प्रयास करें।");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Load only today's entries initially
   useEffect(() => {
-    fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    fetchEntries(`${ENTRIES_URL}?date=${yyyy}-${mm}-${dd}`);
   }, []);
 
   // ---------------- Search Handler ----------------
@@ -116,34 +94,93 @@ const ViewEntries = () => {
         `${ENTRIES_URL}?search=${encodeURIComponent(searchText.trim())}`
       );
     } else if (selectedDate) {
-      const [yyyy, mm, dd] = selectedDate.split("-");
-      fetchEntries(`${ENTRIES_URL}?date=${dd}-${mm}-${yyyy}`);
+      // Send date directly in yyyy-mm-dd format as received from date input
+      fetchEntries(`${ENTRIES_URL}?date=${selectedDate}`);
     } else {
-      fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
+      // Get today's date in yyyy-mm-dd format
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      fetchEntries(`${ENTRIES_URL}?date=${yyyy}-${mm}-${dd}`);
+    }
+  };
+
+  // ---------------- Update Resolution ----------------
+  const handleResolutionChange = async (entry, index, value, isOtherIssue = false) => {
+    try {
+      setLoading(true);
+      const res = await fetch(UPDATE_RESOLUTION_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "updateResolution",
+          registration: entry.registration,
+          itemIndex: isOtherIssue ? 'other' : index + 1, // 'other' for other issues, 1-based index for checklist items
+          resolution: value,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert("✅ Resolution update हो गया!");
+        // Local state भी update कर दें
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.registration === entry.registration
+              ? {
+                  ...e,
+                  ...(isOtherIssue
+                    ? { otherIssueResolution: value }
+                    : {
+                        items: e.items.map((item, i) =>
+                          i === index ? { ...item, resolution: value } : item
+                        ),
+                      }),
+                }
+              : e
+          )
+        );
+      } else {
+        alert("❌ Resolution update fail हुआ!");
+      }
+    } catch (err) {
+      console.error("❌ Update error:", err);
+      alert("❌ Network error while updating resolution.");
+    } finally {
+      setLoading(false);
     }
   };
 
   // ---------------- Render Summary ----------------
-  const renderSummary = (items, otherIssue) => {
-    if (!Array.isArray(items)) {
+  const renderSummary = (entry) => {
+    if (!Array.isArray(entry.items)) {
       return <span style={{ color: "red" }}>❌ डेटा उपलब्ध नहीं</span>;
     }
 
-    const notOk = items
+    const notOk = entry.items
       .map((item, i) =>
         item?.status === "नहीं"
-          ? `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${
-              item?.remark || ""
-            }`
+          ? {
+              label: `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${
+                item?.remark || ""
+              }`,
+              index: i,
+              resolution: item.resolution || "",
+            }
           : null
       )
       .filter(Boolean);
 
-    // अन्य समस्या चेक
-    if (otherIssue && typeof otherIssue === "string" && otherIssue.trim()) {
-      if (otherIssue.trim() !== "ठीक है") {
-        notOk.push(`23. अन्य समस्या — ${otherIssue}`);
-      }
+    // Handle other issues separately from checklist items
+    if (entry.otherIssue && typeof entry.otherIssue === "string" && entry.otherIssue.trim() !== "ठीक है") {
+      notOk.push({
+        label: `अन्य समस्या — ${entry.otherIssue}`,
+        isOtherIssue: true,
+        resolution: entry.otherIssueResolution || ""
+      });
     }
 
     return notOk.length === 0 ? (
@@ -151,60 +188,24 @@ const ViewEntries = () => {
     ) : (
       <div style={{ color: "red" }}>
         {notOk.map((item, i) => (
-          <div key={i}>❌ {item}</div>
+          <div key={i} style={{ marginBottom: "5px" }}>
+            ❌ {item.label}
+            <br />
+            <select
+              value={item.resolution}
+              onChange={(e) =>
+                handleResolutionChange(entry, item.index, e.target.value, item.isOtherIssue)
+              }
+            >
+              <option value="">-- Resolution चुनें --</option>
+              <option value="सही किया">✅ सही किया</option>
+              <option value="ग्राहक ने मना किया">❌ ग्राहक ने मना किया</option>
+            </select>
+          </div>
         ))}
         <div style={{ color: "black" }}>✅ Other All OK</div>
       </div>
     );
-  };
-
-  // ---------------- State Change Handlers ----------------
-  const handleCustomerDecisionChange = (regNo, value) => {
-    setCustomerDecisions((prev) => ({ ...prev, [regNo]: value }));
-    if (value === "Denied") {
-      setRepairStatuses((prev) => ({ ...prev, [regNo]: "Denied" }));
-    } else if (value === "Pending") {
-      setRepairStatuses((prev) => ({ ...prev, [regNo]: "Pending" }));
-    }
-  };
-
-  const handleRepairStatusChange = (regNo, value) => {
-    setRepairStatuses((prev) => ({ ...prev, [regNo]: value }));
-  };
-
-  // ---------------- Update Status ----------------
-  const handleUpdateStatus = async (entry) => {
-    const customerDecision = customerDecisions[entry.registration] || "Pending";
-    const repairStatus = repairStatuses[entry.registration] || "Pending";
-
-    try {
-      setLoading(true);
-      const res = await fetch(UPDATE_STATUS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          action: "updateStatus",
-          registration: entry.registration,
-          customerDecision,
-          repairStatus,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        alert("✅ Status updated successfully!");
-        fetchEntries(`${ENTRIES_URL}?date=${getTodayDateString()}`);
-      } else {
-        alert("❌ Failed to update status.");
-      }
-    } catch (err) {
-      console.error("❌ Update error:", err);
-      alert("❌ Network error while updating.");
-    } finally {
-      setLoading(false);
-    }
   };
 
   // ---------------- JSX ----------------
@@ -246,52 +247,7 @@ const ViewEntries = () => {
             <div className="card-row"><strong>⏰ समय:</strong> {formatTime(entry.dateTime)}</div>
 
             <div className="card-row">
-              <strong>स्थिति:</strong> {renderSummary(entry.items, entry.otherIssue)}
-            </div>
-
-            <div style={{ marginTop: "10px" }}>
-              <label>Customer Decision: </label>
-              <select
-                value={customerDecisions[entry.registration] || "Pending"}
-                onChange={(e) =>
-                  handleCustomerDecisionChange(entry.registration, e.target.value)
-                }
-              >
-                <option value="Pending">Pending</option>
-                <option value="Accepted">Accepted</option>
-                <option value="Denied">Denied</option>
-              </select>
-            </div>
-
-            <div style={{ marginTop: "10px" }}>
-              <label>Repair Status: </label>
-              <select
-                value={repairStatuses[entry.registration] || "Pending"}
-                onChange={(e) =>
-                  handleRepairStatusChange(entry.registration, e.target.value)
-                }
-                disabled={customerDecisions[entry.registration] !== "Accepted"}
-              >
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Done">Completed</option>
-                <option value="Denied">Denied</option>
-              </select>
-            </div>
-
-            <div style={{ marginTop: "10px" }}>
-              <button
-                onClick={() => handleUpdateStatus(entry)}
-                style={{
-                  background: "green",
-                  color: "white",
-                  padding: "5px 10px",
-                  border: "none",
-                  borderRadius: "5px",
-                }}
-              >
-                ✅ Update Status
-              </button>
+              <strong>स्थिति:</strong> {renderSummary(entry)}
             </div>
 
             <div
