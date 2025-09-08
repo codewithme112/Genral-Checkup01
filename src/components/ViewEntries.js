@@ -91,9 +91,7 @@ const ViewEntries = () => {
   // ---------------- Search Handler ----------------
   const handleSearch = () => {
     if (searchText.trim()) {
-      fetchEntries(
-        `${ENTRIES_URL}?search=${encodeURIComponent(searchText.trim())}`
-      );
+      fetchEntries(`${ENTRIES_URL}?registration=${encodeURIComponent(searchText.trim())}`);
     } else if (selectedDate) {
       fetchEntries(`${ENTRIES_URL}?date=${selectedDate}`);
     } else {
