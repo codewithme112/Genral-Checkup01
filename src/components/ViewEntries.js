@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import PrintableEntry from "./PrintableEntry.js";
 import { ENTRIES_URL, UPDATE_RESOLUTION_URL } from "../config.js";
+import config from "../config.js";   // ✅ added to use isDev flag
 
 const checklistLabels = [
   "सर्विस हिस्ट्री देखें और ग्राहक को सुझाव दें",
@@ -94,10 +95,8 @@ const ViewEntries = () => {
         `${ENTRIES_URL}?search=${encodeURIComponent(searchText.trim())}`
       );
     } else if (selectedDate) {
-      // Send date directly in yyyy-mm-dd format as received from date input
       fetchEntries(`${ENTRIES_URL}?date=${selectedDate}`);
     } else {
-      // Get today's date in yyyy-mm-dd format
       const today = new Date();
       const yyyy = today.getFullYear();
       const mm = String(today.getMonth() + 1).padStart(2, '0');
@@ -110,23 +109,38 @@ const ViewEntries = () => {
   const handleResolutionChange = async (entry, index, value, isOtherIssue = false) => {
     try {
       setLoading(true);
-      const res = await fetch(UPDATE_RESOLUTION_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          action: "updateResolution",
-          registration: entry.registration,
-          itemIndex: isOtherIssue ? 'other' : index + 1, // 'other' for other issues, 1-based index for checklist items
-          resolution: value,
-        }),
-      });
 
+      const payload = {
+        action: "updateResolution",
+        registration: entry.registration,
+        itemIndex: isOtherIssue ? 'other' : index + 1,
+        resolution: value,
+      };
+
+      let fetchOptions;
+      if (config.isDev) {
+        // ✅ Dev: send JSON
+        fetchOptions = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        };
+      } else {
+        // ✅ Production: send form-urlencoded
+        const params = new URLSearchParams();
+        Object.entries(payload).forEach(([k, v]) => params.append(k, v));
+        fetchOptions = {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        };
+      }
+
+      const res = await fetch(UPDATE_RESOLUTION_URL, fetchOptions);
       const data = await res.json();
+
       if (data.success) {
         alert("✅ Resolution update हो गया!");
-        // Local state भी update कर दें
         setEntries((prev) =>
           prev.map((e) =>
             e.registration === entry.registration
@@ -174,7 +188,6 @@ const ViewEntries = () => {
       )
       .filter(Boolean);
 
-    // Handle other issues separately from checklist items
     if (entry.otherIssue && typeof entry.otherIssue === "string" && entry.otherIssue.trim() !== "ठीक है") {
       notOk.push({
         label: `अन्य समस्या — ${entry.otherIssue}`,

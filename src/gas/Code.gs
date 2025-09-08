@@ -1,7 +1,18 @@
 // === HELPERS ===
+// CORS headers added to jsonResponse function
 function jsonResponse(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+    .setMimeType(ContentService.MimeType.JSON)
+    .setHeaders({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    });
+}
+
+// Added OPTIONS handler for preflight requests
+function doOptions() {
+  return jsonResponse({});
 }
 
 function isSameDate(d1, d2) {
@@ -64,6 +75,11 @@ function updateStatus_(e) {
   sheet.getRange(last + 1, repCol + 1).setValue(status);
 
   return jsonResponse({ success: true, updatedRow: last + 1 });
+}
+
+// === OPTIONS ===
+function doOptions() {
+  return jsonResponse({});
 }
 
 // === GET ===
