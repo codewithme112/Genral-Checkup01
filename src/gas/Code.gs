@@ -161,7 +161,22 @@ function doPost(e) {
     if (!sheet) return jsonResponse({ success: false, error: "Sheet1 not found" });
 
     const headers = sheet.getDataRange().getValues()[0];
-    const data = JSON.parse(e.postData.contents || "{}");
+    let data = {};
+
+    // ✅ Support both JSON & form-urlencoded
+    if (e.postData.type === "application/json") {
+      data = JSON.parse(e.postData.contents || "{}");
+    } else if (e.postData.type === "application/x-www-form-urlencoded") {
+      const params = e.parameter;
+      data = {
+        action: params.action || "",
+        registration: params.registration || "",
+        kilometers: params.kilometers || "",
+        model: params.model || "",
+        otherIssue: params.otherIssue || "",
+        items: params.items ? JSON.parse(params.items) : []
+      };
+    }
 
     // Handle resolution update
     if (data.action === "updateResolution") {
@@ -177,7 +192,6 @@ function doPost(e) {
       const regCol = headers.indexOf("Reg. No.");
       let lastRow = -1;
 
-      // Find the last row with matching registration
       for (let r = 1; r < values.length; r++) {
         const v = (values[r][regCol] || "").toString().trim();
         if (v === reg) lastRow = r;
@@ -187,7 +201,6 @@ function doPost(e) {
         return jsonResponse({ success: false, error: "Registration not found" });
       }
 
-      // Handle other issue resolution
       if (itemIndex === 'other') {
         const otherIssueResolutionCol = headers.indexOf("Other Issue Resolution");
         if (otherIssueResolutionCol === -1) {
@@ -195,7 +208,6 @@ function doPost(e) {
         }
         sheet.getRange(lastRow + 1, otherIssueResolutionCol + 1).setValue(resolution);
       } else {
-        // Handle checklist item resolution
         const itemIndexNum = parseInt(itemIndex, 10);
         if (isNaN(itemIndexNum) || itemIndexNum < 1 || itemIndexNum > 23) {
           return jsonResponse({ success: false, error: "Invalid item index" });

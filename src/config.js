@@ -6,7 +6,7 @@ const isDev = !process.env.NODE_ENV || process.env.NODE_ENV === "development";
 // ✅ Base API (local dev server OR direct GAS)
 export const API_BASE_URL = isDev
   ? "http://localhost:5050" // local proxy
-  : "https://script.google.com/macros/s/AKfycbwZpTvIeRadUsQv0zmILA0Bo_X_sbem-2r7SZ246S8CX4-ty5kXOr-gO4g4pSaO8zblsg/exec"; // GAS prod URL
+  : "https://script.google.com/macros/s/AKfycbz-Fv-BQMqCaoeJQVBBqDWk1MaARMqXlttZ8A2AQNdO2YEhz3Tpga7En-zHVekGulPx7Q/exec"; // GAS prod URL
 
 // ✅ Endpoints
 export const ENTRIES_URL = isDev
