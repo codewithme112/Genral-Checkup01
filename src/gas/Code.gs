@@ -1,13 +1,16 @@
 // === HELPERS ===
 // CORS headers added to jsonResponse function
 function jsonResponse(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON)
-    .setHeaders({
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    });
+  const response = HtmlService.createHtmlOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+  
+  response.setHeaders({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type'
+  });
+  
+  return response;
 }
 
 // Added OPTIONS handler for preflight requests
