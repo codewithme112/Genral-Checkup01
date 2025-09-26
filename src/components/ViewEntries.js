@@ -104,106 +104,120 @@ const ViewEntries = () => {
   };
 
   // ---------------- Update Resolution ----------------
-  const handleResolutionChange = async (entry, index, value, isOtherIssue = false) => {
-    try {
-      setLoading(true);
+ // ---------------- Update Resolution ----------------
+const handleResolutionChange = async (entry, index, value, isOtherIssue = false, extraText = "") => {
+  try {
+    setLoading(true);
 
-      const payload = {
-        action: "updateResolution",
-        registration: entry.registration,
-        itemIndex: isOtherIssue ? 'other' : index + 1,
-        resolution: value,
+    // ✅ अगर "सही किया" चुना गया है और text भरा है तो merge करके भेजेंगे
+    let finalResolution = value;
+    if (value === "सही किया" && extraText.trim() !== "") {
+      finalResolution = `सही किया: ${extraText.trim()}`;
+    }
+
+    const payload = {
+      action: "updateResolution",
+      registration: entry.registration,
+      itemIndex: isOtherIssue ? "other" : index + 1,
+      resolution: finalResolution,
+    };
+
+    let fetchOptions;
+    if (config.isDev) {
+      fetchOptions = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       };
-
-      let fetchOptions;
-      if (config.isDev) {
-        // ✅ Dev: send JSON
-        fetchOptions = {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        };
-      } else {
-        // ✅ Production: send form-urlencoded
-        const params = new URLSearchParams();
-        Object.entries(payload).forEach(([k, v]) => params.append(k, v));
-        fetchOptions = {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: params.toString(),
-        };
-      }
-
-      const res = await fetch(UPDATE_RESOLUTION_URL, fetchOptions);
-      const data = await res.json();
-
-      if (data.success) {
-        alert("✅ Resolution update हो गया!");
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.registration === entry.registration
-              ? {
-                  ...e,
-                  ...(isOtherIssue
-                    ? { otherIssueResolution: value }
-                    : {
-                        items: e.items.map((item, i) =>
-                          i === index ? { ...item, resolution: value } : item
-                        ),
-                      }),
-                }
-              : e
-          )
-        );
-      } else {
-        alert("❌ Resolution update fail हुआ!");
-      }
-    } catch (err) {
-      console.error("❌ Update error:", err);
-      alert("❌ Network error while updating resolution.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ---------------- Render Summary ----------------
-  const renderSummary = (entry) => {
-    if (!Array.isArray(entry.items)) {
-      return <span style={{ color: "red" }}>❌ डेटा उपलब्ध नहीं</span>;
+    } else {
+      const params = new URLSearchParams();
+      Object.entries(payload).forEach(([k, v]) => params.append(k, v));
+      fetchOptions = {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      };
     }
 
-    const notOk = entry.items
-      .map((item, i) =>
-        item?.status === "नहीं"
-          ? {
-              label: `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${
-                item?.remark || ""
-              }`,
-              index: i,
-              resolution: item.resolution || "",
-            }
-          : null
-      )
-      .filter(Boolean);
+    const res = await fetch(UPDATE_RESOLUTION_URL, fetchOptions);
+    const data = await res.json();
 
-    if (entry.otherIssue && typeof entry.otherIssue === "string" && entry.otherIssue.trim() !== "ठीक है") {
-      notOk.push({
-        label: `अन्य समस्या — ${entry.otherIssue}`,
-        isOtherIssue: true,
-        resolution: entry.otherIssueResolution || ""
-      });
+    if (data.success) {
+      alert("✅ Resolution update हो गया!");
+      setEntries((prev) =>
+        prev.map((e) =>
+          e.registration === entry.registration
+            ? {
+                ...e,
+                ...(isOtherIssue
+                  ? { otherIssueResolution: finalResolution }
+                  : {
+                      items: e.items.map((item, i) =>
+                        i === index ? { ...item, resolution: finalResolution } : item
+                      ),
+                    }),
+              }
+            : e
+        )
+      );
+    } else {
+      alert("❌ Resolution update fail हुआ!");
     }
+  } catch (err) {
+    console.error("❌ Update error:", err);
+    alert("❌ Network error while updating resolution.");
+  } finally {
+    setLoading(false);
+  }
+};
 
-    return notOk.length === 0 ? (
-      <span style={{ color: "green" }}>✅ All OK</span>
-    ) : (
-      <div style={{ color: "red" }}>
-        {notOk.map((item, i) => (
-          <div key={i} style={{ marginBottom: "5px" }}>
+// ---------------- Render Summary ----------------
+const renderSummary = (entry) => {
+  if (!Array.isArray(entry.items)) {
+    return <span style={{ color: "red" }}>❌ डेटा उपलब्ध नहीं</span>;
+  }
+
+  const notOk = entry.items
+    .map((item, i) =>
+      item?.status === "नहीं"
+        ? {
+            label: `${i + 1}. ${checklistLabels[i] || "अज्ञात चेक"} — ${
+              item?.remark || ""
+            }`,
+            index: i,
+            resolution: item.resolution || "",
+          }
+        : null
+    )
+    .filter(Boolean);
+
+  if (
+    entry.otherIssue &&
+    typeof entry.otherIssue === "string" &&
+    entry.otherIssue.trim() !== "ठीक है"
+  ) {
+    notOk.push({
+      label: `अन्य समस्या — ${entry.otherIssue}`,
+      isOtherIssue: true,
+      resolution: entry.otherIssueResolution || "",
+    });
+  }
+
+  return notOk.length === 0 ? (
+    <span style={{ color: "green" }}>✅ All OK</span>
+  ) : (
+    <div style={{ color: "red" }}>
+      {notOk.map((item, i) => {
+        const [baseValue, extraText] = item.resolution.startsWith("सही किया:")
+          ? ["सही किया", item.resolution.replace("सही किया:", "").trim()]
+          : [item.resolution, ""];
+
+        return (
+          <div key={i} style={{ marginBottom: "10px" }}>
             ❌ {item.label}
             <br />
             <select
-              value={item.resolution}
+              value={baseValue || ""}
               onChange={(e) =>
                 handleResolutionChange(entry, item.index, e.target.value, item.isOtherIssue)
               }
@@ -212,12 +226,28 @@ const ViewEntries = () => {
               <option value="सही किया">✅ सही किया</option>
               <option value="ग्राहक ने मना किया">❌ ग्राहक ने मना किया</option>
             </select>
+
+            {/* अगर "सही किया" चुना तो input दिखेगा */}
+            {baseValue === "सही किया" && (
+              <input
+                type="text"
+                placeholder="क्या किया गया लिखें..."
+                defaultValue={extraText}
+                style={{ marginTop: "5px", display: "block", width: "90%" }}
+                onBlur={(e) =>
+                  handleResolutionChange(entry, item.index, "सही किया", item.isOtherIssue, e.target.value)
+                }
+                required
+              />
+            )}
           </div>
-        ))}
-        <div style={{ color: "black" }}>✅ Other All OK</div>
-      </div>
-    );
-  };
+        );
+      })}
+      <div style={{ color: "black" }}>✅ Other All OK</div>
+    </div>
+  );
+};
+
 
   // ---------------- JSX ----------------
   return (
