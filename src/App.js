@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import ChecksheetForm from './components/ChecksheetForm.js';
 import ViewEntries from './components/ViewEntries.js';
+import ManagerDashboard from './components/ManagerDashboard.js';
 
 const App = () => {
   return (
@@ -14,6 +15,7 @@ const App = () => {
       <Routes>
         <Route path="/" element={<ChecksheetForm />} />
         <Route path="/entries" element={<ViewEntries />} />
+        <Route path="/manager" element={<ManagerDashboard />} />
       </Routes>
     </Router>
   );
