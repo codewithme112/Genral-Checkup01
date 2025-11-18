@@ -1,0 +1,85 @@
+/* Mobile-first responsive styles for Today Vehicles page */
+
+.tv-root {
+  padding: 12px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.tv-title {
+  margin: 0 0 8px;
+}
+
+.tv-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.tv-controls button {
+  flex: 1 1 140px;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.tv-main {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.tv-video-wrap {
+  flex: 1 1 auto;
+  width: 100%;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  /* Keep a nice aspect ratio on mobile */
+  aspect-ratio: 4 / 3;
+}
+
+.tv-status {
+  margin-top: 8px;
+}
+
+.tv-side {
+  width: 420px;
+}
+
+.tv-list {
+  margin-top: 8px;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.tv-card {
+  padding: 8px;
+  border: 1px solid #ddd;
+  margin-bottom: 10px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* Desktop/large screens */
+@media (min-width: 769px) {
+  .tv-video-wrap {
+    aspect-ratio: 16 / 9;
+  }
+  .tv-list {
+    max-height: 520px;
+  }
+}
+
+/* Small screens: stack columns and make buttons grid-like */
+@media (max-width: 768px) {
+  .tv-main {
+    flex-direction: column;
+  }
+  .tv-side {
+    width: 100%;
+  }
+  .tv-controls button {
+    flex: 1 1 calc(50% - 8px);
+  }
+}

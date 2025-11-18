@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createWorker } from "tesseract.js";
+import "./TodayVehicle.css";
 
 const TodayVehicle = () => {
   const videoRef = useRef(null);
@@ -38,7 +39,13 @@ const TodayVehicle = () => {
     await w.load();
     await w.loadLanguage("eng");
     await w.initialize("eng");
-    await w.setParameters({ tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -" });
+    await w.setParameters({
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -",
+      preserve_interword_spaces: "1",
+      // Try single-line mode to favor plate-like text
+      psm: "7",
+      tessedit_pageseg_mode: "7"
+    });
     setWorker(w);
     setStatus("OCR ready");
   } catch (err) {
@@ -108,14 +115,71 @@ const TodayVehicle = () => {
     return imageData;
   };
 
+  // Otsu thresholding on grayscale imageData
+  const applyOtsuThreshold = (imageData) => {
+    const d = imageData.data;
+    const hist = new Array(256).fill(0);
+    // Build luminance histogram
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const lum = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+      hist[lum]++;
+    }
+    const total = d.length / 4;
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0;
+    let wB = 0;
+    let wF = 0;
+    let maxVar = 0;
+    let threshold = 127;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > maxVar) {
+        maxVar = between;
+        threshold = t;
+      }
+    }
+    // Apply binary threshold
+    for (let i = 0; i < d.length; i += 4) {
+      const lum = d[i]; // after sigmoid, r==g==b
+      const val = lum > threshold ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = val;
+    }
+    return imageData;
+  };
+
   // Extract candidate plate-like tokens from OCR text
+  const normalizePlateToken = (t) => {
+    let s = t.toUpperCase().replace(/[\s\-]/g, "");
+    // common OCR confusions
+    s = s
+      .replace(/O/g, "0")
+      .replace(/I/g, "1")
+      .replace(/Z/g, "2")
+      .replace(/S/g, "5")
+      .replace(/B/g, "8");
+    return s;
+  };
+
+  const PLATE_RE = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$/;
+
   const extractPlateCandidates = (text) => {
     if (!text) return [];
     const cleaned = text.toUpperCase().replace(/[^A-Z0-9\- \n]/g, " ");
     const tokens = cleaned.split(/[\s\n]+/).map(t => t.trim()).filter(Boolean);
-    // heuristics: length >= MIN_TOKEN_LEN and contains a digit (plates have digits)
-    const candidates = tokens.filter(t => t.length >= MIN_TOKEN_LEN && /[0-9]/.test(t));
-    // dedupe
+    const normalized = tokens.map(normalizePlateToken).filter(Boolean);
+    const strictMatches = normalized.filter(t => PLATE_RE.test(t));
+    if (strictMatches.length) return Array.from(new Set(strictMatches));
+    // fallback heuristic if strict match not found
+    const candidates = normalized.filter(t => t.length >= MIN_TOKEN_LEN && /[0-9]/.test(t));
     return Array.from(new Set(candidates));
   };
 
@@ -136,15 +200,21 @@ const TodayVehicle = () => {
       const ctx = canvas.getContext("2d");
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Preprocess: sigmoid
-      let imageData = ctx.getImageData(0, 0, w, h);
-      imageData = applySigmoidToImageData(imageData, SIGMOID_ALPHA);
-      ctx.putImageData(imageData, 0, 0);
+      // Crop a center band (likely area for plate)
+      const roiX = Math.floor(w * 0.1);
+      const roiY = Math.floor(h * 0.35);
+      const roiW = Math.floor(w * 0.8);
+      const roiH = Math.floor(h * 0.30);
+      let roiData = ctx.getImageData(roiX, roiY, roiW, roiH);
+      // Preprocess: sigmoid for contrast, then Otsu threshold for binarization
+      roiData = applySigmoidToImageData(roiData, SIGMOID_ALPHA);
+      roiData = applyOtsuThreshold(roiData);
+      const roiCanvas = document.createElement("canvas");
+      roiCanvas.width = roiW;
+      roiCanvas.height = roiH;
+      roiCanvas.getContext("2d").putImageData(roiData, 0, 0);
 
-      // optional: you could crop a center band to improve speed/accuracy
-      // const crop = ctx.getImageData(x,y,cw,ch) ...
-
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+      const dataUrl = roiCanvas.toDataURL("image/jpeg", 0.9);
 
       setStatus("Running OCR...");
       const { data: { text } } = await worker.recognize(dataUrl);
@@ -213,45 +283,52 @@ const TodayVehicle = () => {
   };
 
   return (
-    <div style={{ padding: 16 }}>
-      <h2>🚗 Today Vehicles (Camera + Live Detect)</h2>
+    <div className="tv-root">
+      <h2 className="tv-title">🚗 Today Vehicles (Camera + Live Detect)</h2>
 
-      <div style={{ margin: "10px 0" }}>
-        <button onClick={startCamera} style={{ marginRight: 8, padding: "8px 12px" }}>Start Camera</button>
-        <button onClick={stopCamera} style={{ marginRight: 8, padding: "8px 12px" }}>Stop Camera</button>
-
-        <button onClick={startDetect} style={{ marginLeft: 16, marginRight: 8, padding: "8px 12px" }} disabled={!runningCamera}>Start Detect</button>
-        <button onClick={stopDetect} style={{ marginRight: 8, padding: "8px 12px" }} disabled={!runningDetect}>Stop Detect</button>
-
-        <button onClick={clearToday} style={{ marginLeft: 16, padding: "8px 12px" }}>Clear Today</button>
+      <div className="tv-controls">
+        <button onClick={startCamera}>Start Camera</button>
+        <button onClick={stopCamera}>Stop Camera</button>
+        <button onClick={startDetect} disabled={!runningCamera}>Start Detect</button>
+        <button onClick={stopDetect} disabled={!runningDetect}>Stop Detect</button>
+        <button onClick={clearToday}>Clear Today</button>
       </div>
 
-      <div style={{ display: "flex", gap: 16 }}>
+      <div className="tv-main">
         <div style={{ flex: 1 }}>
-          <div style={{ width: "100%", height: 420, background: "#000", borderRadius: 6, overflow: "hidden" }}>
+          <div className="tv-video-wrap">
             <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted playsInline />
           </div>
-          <div style={{ marginTop: 8, color: runningDetect ? "green" : "#666" }}>
+          <div className="tv-status" style={{ color: runningDetect ? "green" : "#666" }}>
             Status: {status}
           </div>
         </div>
 
-        <div style={{ width: 420 }}>
-          <h4>Today's total: <span style={{ color: "green" }}>{todayList.length}</span></h4>
+        <div className="tv-side">
+          <h4>
+            Today's total: <span style={{ color: "green" }}>{todayList.length}</span>
+          </h4>
 
-          <div style={{ marginTop: 8, maxHeight: 520, overflow: "auto" }}>
+          <div className="tv-list">
             {todayList.length === 0 ? (
               <div style={{ color: "#666" }}>No entries yet.</div>
             ) : (
-              todayList.slice().reverse().map((it, idx) => (
-                <div key={idx} style={{ padding: 8, border: "1px solid #ddd", marginBottom: 10, borderRadius: 6, background: "#fff" }}>
-                  <div style={{ fontWeight: 700 }}>{it.plate}</div>
-                  <div style={{ fontSize: 12, color: "#555" }}>{new Date(it.ts).toLocaleString()}</div>
-                  <div style={{ marginTop: 8 }}>
-                    <img src={it.image} alt="snap" style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }} />
+              todayList
+                .slice()
+                .reverse()
+                .map((it, idx) => (
+                  <div key={idx} className="tv-card">
+                    <div style={{ fontWeight: 700 }}>{it.plate}</div>
+                    <div style={{ fontSize: 12, color: "#555" }}>{new Date(it.ts).toLocaleString()}</div>
+                    <div style={{ marginTop: 8 }}>
+                      <img
+                        src={it.image}
+                        alt="snap"
+                        style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))
+                ))
             )}
           </div>
         </div>
