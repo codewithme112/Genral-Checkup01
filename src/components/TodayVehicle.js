@@ -14,10 +14,14 @@ const TodayVehicle = () => {
   const [worker, setWorker] = useState(null);
 
   // Config
-  const CAPTURE_INTERVAL_MS = 1200; // frame interval for detection
-  const SIGMOID_ALPHA = 8.0; // higher -> stronger contrast
+  const CAPTURE_INTERVAL_MS = 1200; // base delay between detections (tunable)
+  const SIGMOID_ALPHA = 8.0; // preprocessing contrast
   const MIN_TOKEN_LEN = 3;
-  const MAX_EXAMPLES = 5;
+  const MAX_ENTRIES = 500;
+
+  // Busy / RAF refs to avoid overlapping work
+  const captureBusyRef = useRef(false);
+  const rafIdRef = useRef(null);
 
   useEffect(() => {
     loadTodayEntries();
@@ -25,40 +29,49 @@ const TodayVehicle = () => {
     return () => {
       stopCamera();
       stopDetect();
-      if (worker) worker.terminate();
+      if (worker && typeof worker.terminate === "function") {
+        try {
+          worker.terminate();
+        } catch (e) {
+          console.warn("Worker terminate failed:", e);
+        }
+      }
     };
     // eslint-disable-next-line
   }, []);
 
-  // Initialize Tesseract worker
- const initWorker = async () => {
-  setStatus("Loading OCR worker...");
-  try {
-    // NOTE: Do NOT pass a function (logger) here — it causes DataCloneError in the worker.
-    const w = createWorker(); // simple, no logger passed
-    await w.load();
-    await w.loadLanguage("eng");
-    await w.initialize("eng");
-    await w.setParameters({
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -",
-      preserve_interword_spaces: "1",
-      // Try single-line mode to favor plate-like text
-      psm: "7",
-      tessedit_pageseg_mode: "7"
-    });
-    setWorker(w);
-    setStatus("OCR ready");
-  } catch (err) {
-    console.error("Worker init error", err);
-    setStatus("OCR worker failed");
-  }
-};
-
+  // Initialize Tesseract worker (improved)
+  const initWorker = async () => {
+    setStatus("Loading OCR worker...");
+    try {
+      const w = createWorker();
+      await w.load();
+      await w.loadLanguage("eng");
+      await w.initialize("eng");
+      await w.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -",
+        preserve_interword_spaces: "1",
+        // default to single-line; we may try other PSMs later per-variant if needed
+        tessedit_pageseg_mode: "7",
+      });
+      setWorker(w);
+      setStatus("OCR ready");
+    } catch (err) {
+      console.error("Worker init error", err);
+      setStatus("OCR worker failed");
+      alert("OCR worker initialization failed. Check console for details.");
+    }
+  };
 
   const loadTodayEntries = () => {
-    const raw = localStorage.getItem("plate_entries_today");
-    const arr = raw ? JSON.parse(raw) : [];
-    setTodayList(arr);
+    try {
+      const raw = localStorage.getItem("plate_entries_today");
+      const arr = raw ? JSON.parse(raw) : [];
+      setTodayList(arr);
+    } catch (e) {
+      console.warn("Failed loading entries:", e);
+      setTodayList([]);
+    }
   };
 
   // Camera controls
@@ -69,7 +82,7 @@ const TodayVehicle = () => {
         return;
       }
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 } },
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
         audio: false
       });
       streamRef.current = stream;
@@ -88,13 +101,17 @@ const TodayVehicle = () => {
 
   const stopCamera = () => {
     setRunningCamera(false);
-    if (videoRef.current) {
-      try { videoRef.current.pause(); } catch (_) {}
-      videoRef.current.srcObject = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
+    try {
+      if (videoRef.current) {
+        try { videoRef.current.pause(); } catch (_) {}
+        videoRef.current.srcObject = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+    } catch (e) {
+      console.warn("Error stopping camera:", e);
     }
     setStatus("Camera stopped");
   };
@@ -103,12 +120,10 @@ const TodayVehicle = () => {
   const applySigmoidToImageData = (imageData, alpha = SIGMOID_ALPHA) => {
     const d = imageData.data;
     for (let i = 0; i < d.length; i += 4) {
-      // luminance
       const r = d[i], g = d[i + 1], b = d[i + 2];
       const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b; // 0-255
-      // normalize to -0.5..0.5 then scale a bit
       const x = (lum / 255) - 0.5;
-      const y = 1 / (1 + Math.exp(-alpha * x)); // sigmoid
+      const y = 1 / (1 + Math.exp(-alpha * x));
       const out = Math.round(y * 255);
       d[i] = d[i + 1] = d[i + 2] = out;
     }
@@ -119,7 +134,6 @@ const TodayVehicle = () => {
   const applyOtsuThreshold = (imageData) => {
     const d = imageData.data;
     const hist = new Array(256).fill(0);
-    // Build luminance histogram
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
       const lum = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
@@ -147,19 +161,18 @@ const TodayVehicle = () => {
         threshold = t;
       }
     }
-    // Apply binary threshold
     for (let i = 0; i < d.length; i += 4) {
-      const lum = d[i]; // after sigmoid, r==g==b
+      const lum = d[i];
       const val = lum > threshold ? 255 : 0;
       d[i] = d[i + 1] = d[i + 2] = val;
     }
     return imageData;
   };
 
-  // Extract candidate plate-like tokens from OCR text
+  // Normalization & extraction helpers
   const normalizePlateToken = (t) => {
+    if (!t) return "";
     let s = t.toUpperCase().replace(/[\s\-]/g, "");
-    // common OCR confusions
     s = s
       .replace(/O/g, "0")
       .replace(/I/g, "1")
@@ -178,80 +191,251 @@ const TodayVehicle = () => {
     const normalized = tokens.map(normalizePlateToken).filter(Boolean);
     const strictMatches = normalized.filter(t => PLATE_RE.test(t));
     if (strictMatches.length) return Array.from(new Set(strictMatches));
-    // fallback heuristic if strict match not found
     const candidates = normalized.filter(t => t.length >= MIN_TOKEN_LEN && /[0-9]/.test(t));
     return Array.from(new Set(candidates));
   };
 
-  // Capture frame, preprocess, OCR
+  // small sleep helper
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  // Capture frame, preprocess multiple variants, OCR sequentially (serialized)
   const captureAndDetect = async () => {
     if (!videoRef.current || !worker) return;
+    if (captureBusyRef.current) return;
+    captureBusyRef.current = true;
     try {
       const video = videoRef.current;
-      const w = 800; // processing width
-      const h = Math.round((video.videoHeight / video.videoWidth) * w) || 600;
+
+      // Processing resolution (higher helps OCR for small text)
+      const procW = 1200;
+      const procH = Math.round((video.videoHeight / video.videoWidth) * procW) || 800;
+
       let canvas = procCanvasRef.current;
       if (!canvas) {
         canvas = document.createElement("canvas");
         procCanvasRef.current = canvas;
       }
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = procW;
+      canvas.height = procH;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, w, h);
+      // draw current video frame
+      ctx.drawImage(video, 0, 0, procW, procH);
 
-      // Crop a center band (likely area for plate)
-      const roiX = Math.floor(w * 0.1);
-      const roiY = Math.floor(h * 0.35);
-      const roiW = Math.floor(w * 0.8);
-      const roiH = Math.floor(h * 0.30);
-      let roiData = ctx.getImageData(roiX, roiY, roiW, roiH);
-      // Preprocess: sigmoid for contrast, then Otsu threshold for binarization
-      roiData = applySigmoidToImageData(roiData, SIGMOID_ALPHA);
-      roiData = applyOtsuThreshold(roiData);
+      // ROI selection (center band) - slightly adjusted to catch plates lower/higher
+      const roiX = Math.floor(procW * 0.10);
+      const roiY = Math.floor(procH * 0.28);
+      const roiW = Math.floor(procW * 0.80);
+      const roiH = Math.floor(procH * 0.34);
+
+      // get base ROI and upscale it for OCR
+      const baseRoi = ctx.getImageData(roiX, roiY, roiW, roiH);
       const roiCanvas = document.createElement("canvas");
-      roiCanvas.width = roiW;
-      roiCanvas.height = roiH;
-      roiCanvas.getContext("2d").putImageData(roiData, 0, 0);
+      const upscaleFactor = 2; // try 2x for better OCR; tune to 2 or 3
+      roiCanvas.width = roiW * upscaleFactor;
+      roiCanvas.height = roiH * upscaleFactor;
+      const roiCtx = roiCanvas.getContext("2d");
 
-      const dataUrl = roiCanvas.toDataURL("image/jpeg", 0.9);
+      // put base ROI into temporary canvas then scale into roiCanvas
+      const tmp = document.createElement("canvas");
+      tmp.width = roiW;
+      tmp.height = roiH;
+      tmp.getContext("2d").putImageData(baseRoi, 0, 0);
+      roiCtx.drawImage(tmp, 0, 0, roiCanvas.width, roiCanvas.height);
 
-      setStatus("Running OCR...");
-      const { data: { text } } = await worker.recognize(dataUrl);
-      setStatus("OCR done");
-      const candidates = extractPlateCandidates(text);
+      // Build preprocessing variants (dataURLs)
+      const variants = [];
 
-      if (candidates.length > 0) {
-        // log each candidate as an entry (if not duplicate recent)
-        const ts = Date.now();
-        const dataUri = dataUrl; // snapshot to save
-        const raw = localStorage.getItem("plate_entries_today");
-        const arr = raw ? JSON.parse(raw) : [];
+      // Variant A: Sigmoid + Otsu (strong contrast + binarize)
+      try {
+        const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
+        applySigmoidToImageData(imgData, SIGMOID_ALPHA);
+        applyOtsuThreshold(imgData);
+        const c = document.createElement("canvas");
+        c.width = roiCanvas.width; c.height = roiCanvas.height;
+        c.getContext("2d").putImageData(imgData, 0, 0);
+        variants.push(c.toDataURL("image/jpeg", 0.95));
+      } catch (e) {
+        console.warn("Variant A failed:", e);
+      }
 
-        // For each candidate, check recent duplicates (last 30s) to avoid spam
-        const recentWindow = 30_000;
-        for (const plateText of candidates) {
-          const seenRecently = arr.some(e => e.plate === plateText && (ts - e.ts) < recentWindow);
-          if (!seenRecently) {
-            arr.push({ plate: plateText, ts, image: dataUri });
-            // keep only last N entries if you want
+      // Variant B: Adaptive/block threshold (grayscale -> local threshold)
+      try {
+        const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
+        // convert to grayscale
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const lum = Math.round(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+          d[i] = d[i + 1] = d[i + 2] = lum;
+        }
+        // local/block thresholding
+        const w = imgData.width, h = imgData.height;
+        const block = Math.max(16, Math.floor(Math.min(w, h) / 16)); // adaptive block size
+        const out = new Uint8ClampedArray(d.length);
+        for (let by = 0; by < h; by += block) {
+          for (let bx = 0; bx < w; bx += block) {
+            let sum = 0, count = 0;
+            for (let yy = by; yy < Math.min(h, by + block); yy++) {
+              for (let xx = bx; xx < Math.min(w, bx + block); xx++) {
+                const idx = (yy * w + xx) * 4;
+                sum += imgData.data[idx];
+                count++;
+              }
+            }
+            const mean = sum / (count || 1);
+            for (let yy = by; yy < Math.min(h, by + block); yy++) {
+              for (let xx = bx; xx < Math.min(w, bx + block); xx++) {
+                const idx = (yy * w + xx) * 4;
+                const val = imgData.data[idx] > mean ? 255 : 0;
+                out[idx] = out[idx + 1] = out[idx + 2] = val;
+                out[idx + 3] = 255;
+              }
+            }
           }
         }
-        // persist and update UI
-        localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-500))); // cap
-        setTodayList(arr.slice(-500));
-        setStatus(`Detected: ${candidates.join(", ")}`);
+        const id = new ImageData(out, w, h);
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").putImageData(id, 0, 0);
+        variants.push(c.toDataURL("image/jpeg", 0.95));
+      } catch (e) {
+        console.warn("Variant B failed:", e);
+      }
+
+      // Variant C: Inverted + small dilation (helps white-on-dark or dark-on-white)
+      try {
+        const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
+        applySigmoidToImageData(imgData, SIGMOID_ALPHA);
+        applyOtsuThreshold(imgData);
+        const d = imgData.data;
+        const w = imgData.width, h = imgData.height;
+        // invert
+        for (let i = 0; i < d.length; i += 4) {
+          const v = d[i];
+          const inv = 255 - v;
+          d[i] = d[i + 1] = d[i + 2] = inv;
+        }
+        // naive dilation
+        const copy = new Uint8ClampedArray(d);
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const idx = (y * w + x) * 4;
+            let anyWhite = false;
+            for (let yy = y - 1; yy <= y + 1; yy++) {
+              for (let xx = x - 1; xx <= x + 1; xx++) {
+                const n = (yy * w + xx) * 4;
+                if (copy[n] > 200) { anyWhite = true; break; }
+              }
+              if (anyWhite) break;
+            }
+            const val = anyWhite ? 255 : 0;
+            d[idx] = d[idx + 1] = d[idx + 2] = val;
+          }
+        }
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").putImageData(imgData, 0, 0);
+        variants.push(c.toDataURL("image/jpeg", 0.95));
+      } catch (e) {
+        console.warn("Variant C failed:", e);
+      }
+
+      // Variant D: original color upscale (fallback)
+      try {
+        variants.push(roiCanvas.toDataURL("image/jpeg", 0.9));
+      } catch (e) {
+        console.warn("Variant D failed:", e);
+      }
+
+      // Prepare storage array
+      const ts = Date.now();
+      const raw = localStorage.getItem("plate_entries_today");
+      const arr = raw ? JSON.parse(raw) : [];
+
+      // Run OCR sequentially on variants and pick best candidate
+      setStatus("Running OCR variants...");
+      let bestCandidates = [];
+
+      for (const dataUrl of variants) {
+        try {
+          // small delay to reduce worker thrash
+          await sleep(100);
+          const { data } = await worker.recognize(dataUrl);
+          const text = (data && data.text) ? data.text : "";
+          const words = (data && data.words) ? data.words : [];
+          // candidates from full text
+          const candsFromText = extractPlateCandidates(text);
+          for (const t of candsFromText) {
+            bestCandidates.push({ plate: t, score: 40 }); // base score
+          }
+          // also use words with confidences
+          for (const w of words) {
+            if (!w || !w.text) continue;
+            const norm = normalizePlateToken(w.text || "");
+            const conf = w.confidence || 0;
+            if (norm && norm.length >= MIN_TOKEN_LEN) {
+              // larger plates get slight boost
+              const lenBoost = Math.min(20, norm.length * 2);
+              bestCandidates.push({ plate: norm, score: conf + lenBoost });
+            }
+          }
+          // quick accept strict regex with decent score
+          const strict = bestCandidates.find(x => PLATE_RE.test(x.plate) && x.score >= 40);
+          if (strict) {
+            const seenRecently = arr.some(e => e.plate === strict.plate && (ts - e.ts) < 30_000);
+            if (!seenRecently) {
+              arr.push({ plate: strict.plate, ts, image: dataUrl });
+              localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
+              setTodayList(arr.slice(-MAX_ENTRIES));
+              setStatus(`Detected: ${strict.plate}`);
+            } else {
+              setStatus(`Detected (recent): ${strict.plate}`);
+            }
+            captureBusyRef.current = false;
+            return;
+          }
+        } catch (err) {
+          console.error("OCR variant error:", err);
+        }
+      }
+
+      // If no strict match, pick highest scored candidate overall
+      if (bestCandidates.length > 0) {
+        // dedupe by plate and pick max score
+        const map = new Map();
+        for (const c of bestCandidates) {
+          const p = c.plate;
+          if (!map.has(p) || map.get(p) < c.score) map.set(p, c.score);
+        }
+        const list = Array.from(map.entries()).map(([plate, score]) => ({ plate, score }));
+        list.sort((a, b) => b.score - a.score);
+        const pick = list[0];
+        if (pick && pick.score > 45 && pick.plate.length >= MIN_TOKEN_LEN) {
+          const seenRecently = arr.some(e => e.plate === pick.plate && (ts - e.ts) < 30_000);
+          if (!seenRecently) {
+            // Use first variant image as snapshot if available
+            const snapshot = variants.length ? variants[0] : null;
+            arr.push({ plate: pick.plate, ts, image: snapshot });
+            localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
+            setTodayList(arr.slice(-MAX_ENTRIES));
+            setStatus(`Detected (best): ${pick.plate}`);
+          } else {
+            setStatus(`Detected (recent best): ${pick.plate}`);
+          }
+        } else {
+          setStatus("No confident plate found");
+        }
       } else {
         setStatus("No plate found in frame");
       }
     } catch (err) {
-      console.error("detect err", err);
+      console.error("captureAndDetect error:", err);
       setStatus("Detect error: " + (err.message || err.name));
+    } finally {
+      captureBusyRef.current = false;
     }
   };
 
-  // Detection loop
-  const detectLoopRef = useRef(null);
+  // Detection loop using requestAnimationFrame and serialized captures
   const startDetect = () => {
     if (!runningCamera) {
       alert("Please start camera first");
@@ -263,15 +447,31 @@ const TodayVehicle = () => {
     }
     if (runningDetect) return;
     setRunningDetect(true);
-    setStatus("Detection started");
-    detectLoopRef.current = setInterval(captureAndDetect, CAPTURE_INTERVAL_MS);
+    setStatus("Detection started (loop)");
+    const loop = async () => {
+      try {
+        await captureAndDetect();
+      } catch (e) {
+        console.warn("Loop capture failed:", e);
+      }
+      // Wait a bit (tunable) between attempts to avoid CPU hogging
+      await sleep(CAPTURE_INTERVAL_MS);
+      if (runningDetect) {
+        rafIdRef.current = requestAnimationFrame(loop);
+      }
+    };
+    rafIdRef.current = requestAnimationFrame(loop);
   };
 
   const stopDetect = () => {
     setRunningDetect(false);
-    if (detectLoopRef.current) {
-      clearInterval(detectLoopRef.current);
-      detectLoopRef.current = null;
+    if (rafIdRef.current) {
+      try {
+        cancelAnimationFrame(rafIdRef.current);
+      } catch (e) {
+        // ignore
+      }
+      rafIdRef.current = null;
     }
     setStatus("Detection stopped");
   };
@@ -287,9 +487,9 @@ const TodayVehicle = () => {
       <h2 className="tv-title">🚗 Today Vehicles (Camera + Live Detect)</h2>
 
       <div className="tv-controls">
-        <button onClick={startCamera}>Start Camera</button>
-        <button onClick={stopCamera}>Stop Camera</button>
-        <button onClick={startDetect} disabled={!runningCamera}>Start Detect</button>
+        <button onClick={startCamera} disabled={runningCamera}>Start Camera</button>
+        <button onClick={stopCamera} disabled={!runningCamera}>Stop Camera</button>
+        <button onClick={startDetect} disabled={!runningCamera || runningDetect}>Start Detect</button>
         <button onClick={stopDetect} disabled={!runningDetect}>Stop Detect</button>
         <button onClick={clearToday}>Clear Today</button>
       </div>
@@ -297,7 +497,13 @@ const TodayVehicle = () => {
       <div className="tv-main">
         <div style={{ flex: 1 }}>
           <div className="tv-video-wrap">
-            <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted playsInline />
+            <video
+              ref={videoRef}
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              muted
+              playsInline
+              autoPlay
+            />
           </div>
           <div className="tv-status" style={{ color: runningDetect ? "green" : "#666" }}>
             Status: {status}
@@ -321,11 +527,13 @@ const TodayVehicle = () => {
                     <div style={{ fontWeight: 700 }}>{it.plate}</div>
                     <div style={{ fontSize: 12, color: "#555" }}>{new Date(it.ts).toLocaleString()}</div>
                     <div style={{ marginTop: 8 }}>
-                      <img
-                        src={it.image}
-                        alt="snap"
-                        style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }}
-                      />
+                      {it.image ? (
+                        <img
+                          src={it.image}
+                          alt="snap"
+                          style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }}
+                        />
+                      ) : null}
                     </div>
                   </div>
                 ))
