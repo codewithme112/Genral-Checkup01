@@ -207,8 +207,8 @@ const TodayVehicle = () => {
       const video = videoRef.current;
 
       // Processing resolution (higher helps OCR for small text)
-      const procW = 1200;
-      const procH = Math.round((video.videoHeight / video.videoWidth) * procW) || 800;
+      const procW = 1600;
+      const procH = Math.round((video.videoHeight / video.videoWidth) * procW) || 1000;
 
       let canvas = procCanvasRef.current;
       if (!canvas) {
@@ -222,15 +222,15 @@ const TodayVehicle = () => {
       ctx.drawImage(video, 0, 0, procW, procH);
 
       // ROI selection (center band) - slightly adjusted to catch plates lower/higher
-      const roiX = Math.floor(procW * 0.10);
-      const roiY = Math.floor(procH * 0.28);
-      const roiW = Math.floor(procW * 0.80);
-      const roiH = Math.floor(procH * 0.34);
+      const roiX = Math.floor(procW * 0.08);
+const roiY = Math.floor(procH * 0.45); // moved down from ~0.28
+const roiW = Math.floor(procW * 0.84);
+const roiH = Math.floor(procH * 0.25);
 
       // get base ROI and upscale it for OCR
       const baseRoi = ctx.getImageData(roiX, roiY, roiW, roiH);
       const roiCanvas = document.createElement("canvas");
-      const upscaleFactor = 2; // try 2x for better OCR; tune to 2 or 3
+      const upscaleFactor = 3; // try 2x for better OCR; tune to 2 or 3
       roiCanvas.width = roiW * upscaleFactor;
       roiCanvas.height = roiH * upscaleFactor;
       const roiCtx = roiCanvas.getContext("2d");
@@ -346,6 +346,31 @@ const TodayVehicle = () => {
         console.warn("Variant D failed:", e);
       }
 
+      // Variant E: color-boost for yellow plates (contrast stretch + unsharp-like)
+      try {
+        const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
+        const d = imgData.data;
+        let minV = 255, maxV = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const lum = Math.round(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+          if (lum < minV) minV = lum;
+          if (lum > maxV) maxV = lum;
+        }
+        const range = Math.max(1, maxV - minV);
+        for (let i = 0; i < d.length; i += 4) {
+          const lum = Math.round(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+          let v = Math.round(((lum - minV) * 255) / range);
+          v = Math.max(0, Math.min(255, Math.round((v - 128) * 1.4 + 128))); // contrast boost
+          d[i] = d[i + 1] = d[i + 2] = v;
+        }
+        const c = document.createElement("canvas");
+        c.width = roiCanvas.width; c.height = roiCanvas.height;
+        c.getContext("2d").putImageData(imgData, 0, 0);
+        variants.push(c.toDataURL("image/jpeg", 0.95));
+      } catch (e) {
+        console.warn("yellow variant failed", e);
+      }
+
       // Prepare storage array
       const ts = Date.now();
       const raw = localStorage.getItem("plate_entries_today");
@@ -359,7 +384,23 @@ const TodayVehicle = () => {
         try {
           // small delay to reduce worker thrash
           await sleep(100);
-          const { data } = await worker.recognize(dataUrl);
+          // try with psm 7 first, then psm 8 if no good result
+          let ocrResult = null;
+          try {
+            await worker.setParameters({ tessedit_pageseg_mode: "7" });
+            ocrResult = await worker.recognize(dataUrl);
+          } catch (e) {
+            console.warn("psm7 failed", e);
+          }
+          if (!ocrResult || !ocrResult.data || !ocrResult.data.text || !ocrResult.data.text.trim()) {
+            try {
+              await worker.setParameters({ tessedit_pageseg_mode: "8" });
+              ocrResult = await worker.recognize(dataUrl);
+            } catch (e) {
+              console.warn("psm8 failed", e);
+            }
+          }
+          const data = ocrResult ? ocrResult.data : {};
           const text = (data && data.text) ? data.text : "";
           const words = (data && data.words) ? data.words : [];
           // candidates from full text
@@ -436,7 +477,7 @@ const TodayVehicle = () => {
   };
 
   // Detection loop using requestAnimationFrame and serialized captures
-  const startDetect = () => {
+  const startDetect = async () => {
     if (!runningCamera) {
       alert("Please start camera first");
       return;
@@ -447,6 +488,9 @@ const TodayVehicle = () => {
     }
     if (runningDetect) return;
     setRunningDetect(true);
+    setStatus("Detection starting...");
+    // after ensuring camera and worker ready, wait a bit to let camera autofocus
+    await sleep(600); // 600ms delay before first capture
     setStatus("Detection started (loop)");
     const loop = async () => {
       try {
