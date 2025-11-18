@@ -1,3 +1,4 @@
+// src/components/TodayVehicle.js
 import React, { useEffect, useRef, useState } from "react";
 import { createWorker } from "tesseract.js";
 import "./TodayVehicle.css";
@@ -13,24 +14,24 @@ const TodayVehicle = () => {
   const [status, setStatus] = useState("idle");
   const [worker, setWorker] = useState(null);
 
-  // Config
-  const CAPTURE_INTERVAL_MS = 1200; // base delay between detections (tunable)
+  // Config / tuning
+  const CAPTURE_INTERVAL_MS = 900; // base delay between detections (tune)
   const SIGMOID_ALPHA = 8.0; // preprocessing contrast
   const MIN_TOKEN_LEN = 3;
   const MAX_ENTRIES = 500;
-  const DUPLICATE_WINDOW_MS = 4000; // 3–5s duplicate suppression window
-  const DEBUG = false; // toggle to print debug logs
+  const DUPLICATE_WINDOW_MS = 4000; // 3–5s suppression
+  const DEBUG = false;
 
-  // Busy / RAF refs to avoid overlapping work
+  // busy / raf refs
   const captureBusyRef = useRef(false);
-  const rafIdRef = useRef(null);
+  const rafRef = useRef(null);
 
   useEffect(() => {
     loadTodayEntries();
     initWorker();
     return () => {
-      stopCamera();
       stopDetect();
+      stopCamera();
       if (worker && typeof worker.terminate === "function") {
         try {
           worker.terminate();
@@ -42,7 +43,7 @@ const TodayVehicle = () => {
     // eslint-disable-next-line
   }, []);
 
-  // Initialize Tesseract worker (improved)
+  // Initialize Tesseract worker
   const initWorker = async () => {
     setStatus("Loading OCR worker...");
     try {
@@ -53,7 +54,6 @@ const TodayVehicle = () => {
       await w.setParameters({
         tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -",
         preserve_interword_spaces: "1",
-        // default to single-line; we may try other PSMs later per-variant if needed
         tessedit_pageseg_mode: "7",
       });
       setWorker(w);
@@ -61,7 +61,7 @@ const TodayVehicle = () => {
     } catch (err) {
       console.error("Worker init error", err);
       setStatus("OCR worker failed");
-      alert("OCR worker initialization failed. Check console for details.");
+      alert("OCR worker initialization failed. Check console.");
     }
   };
 
@@ -85,7 +85,7 @@ const TodayVehicle = () => {
       }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 } },
-        audio: false
+        audio: false,
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -109,7 +109,7 @@ const TodayVehicle = () => {
         videoRef.current.srcObject = null;
       }
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
     } catch (e) {
@@ -118,12 +118,12 @@ const TodayVehicle = () => {
     setStatus("Camera stopped");
   };
 
-  // Sigmoid preprocessing: apply to imageData (modifies and returns)
+  // preprocessing helpers
   const applySigmoidToImageData = (imageData, alpha = SIGMOID_ALPHA) => {
     const d = imageData.data;
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], g = d[i + 1], b = d[i + 2];
-      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b; // 0-255
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       const x = (lum / 255) - 0.5;
       const y = 1 / (1 + Math.exp(-alpha * x));
       const out = Math.round(y * 255);
@@ -132,7 +132,6 @@ const TodayVehicle = () => {
     return imageData;
   };
 
-  // Otsu thresholding on grayscale imageData
   const applyOtsuThreshold = (imageData) => {
     const d = imageData.data;
     const hist = new Array(256).fill(0);
@@ -144,11 +143,7 @@ const TodayVehicle = () => {
     const total = d.length / 4;
     let sum = 0;
     for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0;
-    let wB = 0;
-    let wF = 0;
-    let maxVar = 0;
-    let threshold = 127;
+    let sumB = 0, wB = 0, wF = 0, maxVar = 0, threshold = 127;
     for (let t = 0; t < 256; t++) {
       wB += hist[t];
       if (wB === 0) continue;
@@ -158,10 +153,7 @@ const TodayVehicle = () => {
       const mB = sumB / wB;
       const mF = (sum - sumB) / wF;
       const between = wB * wF * (mB - mF) * (mB - mF);
-      if (between > maxVar) {
-        maxVar = between;
-        threshold = t;
-      }
+      if (between > maxVar) { maxVar = between; threshold = t; }
     }
     for (let i = 0; i < d.length; i += 4) {
       const lum = d[i];
@@ -171,22 +163,17 @@ const TodayVehicle = () => {
     return imageData;
   };
 
-  // Normalization & extraction helpers
+  // normalization and plate regex
   const normalizePlateToken = (t) => {
     if (!t) return "";
     let s = t.toUpperCase().replace(/[\s\-]/g, "");
-    s = s
-      .replace(/O/g, "0")
-      .replace(/I/g, "1")
-      .replace(/Z/g, "2")
-      .replace(/S/g, "5")
-      .replace(/B/g, "8");
+    s = s.replace(/O/g, "0").replace(/I/g, "1").replace(/Z/g, "2").replace(/S/g, "5").replace(/B/g, "8");
     return s;
   };
 
   const PLATE_RE = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$/;
 
-  // Merge horizontally adjacent words into tokens using bbox positions
+  // Merge horizontally adjacent words into tokens
   const mergeWordsToTokens = (words, gapPx = 30) => {
     if (!Array.isArray(words) || words.length === 0) return [];
     const items = words
@@ -199,6 +186,7 @@ const TodayVehicle = () => {
         return { text: w.text, x0, x1, conf };
       })
       .sort((a, b) => a.x0 - b.x0);
+
     const tokens = [];
     let cur = null;
     for (const it of items) {
@@ -208,7 +196,7 @@ const TodayVehicle = () => {
       }
       const gap = Math.max(0, it.x0 - cur.x1);
       if (gap <= gapPx) {
-        cur.text += it.text; // merge adjacent
+        cur.text += it.text;
         cur.x1 = Math.max(cur.x1, it.x1);
         cur.confs.push(it.conf);
       } else {
@@ -224,7 +212,7 @@ const TodayVehicle = () => {
     return tokens;
   };
 
-  const extractPlateCandidates = (text) => {
+  const extractPlateCandidatesFromText = (text) => {
     if (!text) return [];
     const cleaned = text.toUpperCase().replace(/[^A-Z0-9\- \n]/g, " ");
     const tokens = cleaned.split(/[\s\n]+/).map(t => t.trim()).filter(Boolean);
@@ -235,19 +223,19 @@ const TodayVehicle = () => {
     return Array.from(new Set(candidates));
   };
 
-  // small sleep helper
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-  // Capture frame, preprocess multiple variants, OCR sequentially (serialized)
+  // Main capture & detect function
   const captureAndDetect = async () => {
     if (!videoRef.current || !worker) return;
     if (captureBusyRef.current) return;
     captureBusyRef.current = true;
+
     try {
       const video = videoRef.current;
 
-      // Processing resolution (higher helps OCR for small text)
-      const procW = 1600;
+      // Processing resolution + ROI + upscale
+      const procW = 1600; // tune down to 1200 on slow devices
       const procH = Math.round((video.videoHeight / video.videoWidth) * procW) || 1000;
 
       let canvas = procCanvasRef.current;
@@ -258,34 +246,37 @@ const TodayVehicle = () => {
       canvas.width = procW;
       canvas.height = procH;
       const ctx = canvas.getContext("2d");
-      // draw current video frame
-      ctx.drawImage(video, 0, 0, procW, procH);
 
-      // ROI selection (center band) - slightly adjusted to catch plates lower/higher
+      // draw current frame at processing resolution
+      try {
+        ctx.drawImage(video, 0, 0, procW, procH);
+      } catch (e) {
+        // fallback to smaller draw if video not ready
+        ctx.drawImage(video, 0, 0, Math.min(procW, 800), Math.min(procH, 600));
+      }
+
+      // ROI selection - focused band near typical plate area (tweak if needed)
       const roiX = Math.floor(procW * 0.08);
-const roiY = Math.floor(procH * 0.45); // moved down from ~0.28
-const roiW = Math.floor(procW * 0.84);
-const roiH = Math.floor(procH * 0.25);
+      const roiY = Math.floor(procH * 0.45);
+      const roiW = Math.floor(procW * 0.84);
+      const roiH = Math.floor(procH * 0.25);
 
-      // get base ROI and upscale it for OCR
+      // get ROI and upscale
       const baseRoi = ctx.getImageData(roiX, roiY, roiW, roiH);
       const roiCanvas = document.createElement("canvas");
-      const upscaleFactor = 3; // try 2x for better OCR; tune to 2 or 3
-      roiCanvas.width = roiW * upscaleFactor;
-      roiCanvas.height = roiH * upscaleFactor;
+      const upscaleFactor = 3; // 3x for better OCR; reduce to 2 for performance
+      roiCanvas.width = Math.max(1, Math.floor(roiW * upscaleFactor));
+      roiCanvas.height = Math.max(1, Math.floor(roiH * upscaleFactor));
       const roiCtx = roiCanvas.getContext("2d");
-
-      // put base ROI into temporary canvas then scale into roiCanvas
       const tmp = document.createElement("canvas");
-      tmp.width = roiW;
-      tmp.height = roiH;
+      tmp.width = roiW; tmp.height = roiH;
       tmp.getContext("2d").putImageData(baseRoi, 0, 0);
       roiCtx.drawImage(tmp, 0, 0, roiCanvas.width, roiCanvas.height);
 
-      // Build preprocessing variants (dataURLs)
+      // Build preprocessing variants
       const variants = [];
 
-      // Variant A: Sigmoid + Otsu (strong contrast + binarize)
+      // Variant A: Sigmoid + Otsu
       try {
         const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
         applySigmoidToImageData(imgData, SIGMOID_ALPHA);
@@ -298,18 +289,16 @@ const roiH = Math.floor(procH * 0.25);
         console.warn("Variant A failed:", e);
       }
 
-      // Variant B: Adaptive/block threshold (grayscale -> local threshold)
+      // Variant B: Grayscale + adaptive/local threshold
       try {
         const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
-        // convert to grayscale
         const d = imgData.data;
         for (let i = 0; i < d.length; i += 4) {
           const lum = Math.round(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
           d[i] = d[i + 1] = d[i + 2] = lum;
         }
-        // local/block thresholding
         const w = imgData.width, h = imgData.height;
-        const block = Math.max(16, Math.floor(Math.min(w, h) / 16)); // adaptive block size
+        const block = Math.max(16, Math.floor(Math.min(w, h) / 16));
         const out = new Uint8ClampedArray(d.length);
         for (let by = 0; by < h; by += block) {
           for (let bx = 0; bx < w; bx += block) {
@@ -333,28 +322,23 @@ const roiH = Math.floor(procH * 0.25);
           }
         }
         const id = new ImageData(out, w, h);
-        const c = document.createElement("canvas");
-        c.width = w; c.height = h;
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
         c.getContext("2d").putImageData(id, 0, 0);
         variants.push(c.toDataURL("image/jpeg", 0.95));
       } catch (e) {
         console.warn("Variant B failed:", e);
       }
 
-      // Variant C: Inverted + small dilation (helps white-on-dark or dark-on-white)
+      // Variant C: Sigmoid + Otsu + invert + small dilation
       try {
         const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
         applySigmoidToImageData(imgData, SIGMOID_ALPHA);
         applyOtsuThreshold(imgData);
-        const d = imgData.data;
-        const w = imgData.width, h = imgData.height;
-        // invert
+        const d = imgData.data; const w = imgData.width, h = imgData.height;
         for (let i = 0; i < d.length; i += 4) {
-          const v = d[i];
-          const inv = 255 - v;
+          const inv = 255 - d[i];
           d[i] = d[i + 1] = d[i + 2] = inv;
         }
-        // naive dilation
         const copy = new Uint8ClampedArray(d);
         for (let y = 1; y < h - 1; y++) {
           for (let x = 1; x < w - 1; x++) {
@@ -371,22 +355,14 @@ const roiH = Math.floor(procH * 0.25);
             d[idx] = d[idx + 1] = d[idx + 2] = val;
           }
         }
-        const c = document.createElement("canvas");
-        c.width = w; c.height = h;
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
         c.getContext("2d").putImageData(imgData, 0, 0);
         variants.push(c.toDataURL("image/jpeg", 0.95));
       } catch (e) {
         console.warn("Variant C failed:", e);
       }
 
-      // Variant D: original color upscale (fallback)
-      try {
-        variants.push(roiCanvas.toDataURL("image/jpeg", 0.9));
-      } catch (e) {
-        console.warn("Variant D failed:", e);
-      }
-
-      // Variant E: color-boost for yellow plates (contrast stretch + unsharp-like)
+      // Variant D: Color-boost for yellow plates (contrast stretch + boost)
       try {
         const imgData = roiCtx.getImageData(0, 0, roiCanvas.width, roiCanvas.height);
         const d = imgData.data;
@@ -400,92 +376,89 @@ const roiH = Math.floor(procH * 0.25);
         for (let i = 0; i < d.length; i += 4) {
           const lum = Math.round(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
           let v = Math.round(((lum - minV) * 255) / range);
-          v = Math.max(0, Math.min(255, Math.round((v - 128) * 1.4 + 128))); // contrast boost
+          v = Math.max(0, Math.min(255, Math.round((v - 128) * 1.4 + 128)));
           d[i] = d[i + 1] = d[i + 2] = v;
         }
-        const c = document.createElement("canvas");
-        c.width = roiCanvas.width; c.height = roiCanvas.height;
+        const c = document.createElement("canvas"); c.width = roiCanvas.width; c.height = roiCanvas.height;
         c.getContext("2d").putImageData(imgData, 0, 0);
         variants.push(c.toDataURL("image/jpeg", 0.95));
       } catch (e) {
-        console.warn("yellow variant failed", e);
+        console.warn("Variant D failed:", e);
       }
 
-      // Prepare storage array
+      // Variant E: original color upscale fallback
+      try {
+        variants.push(roiCanvas.toDataURL("image/jpeg", 0.9));
+      } catch (e) {
+        console.warn("Variant E failed:", e);
+      }
+
+      // OCR per variant (serialized + multi-PSM fallback)
+      setStatus("Running OCR variants...");
       const ts = Date.now();
       const raw = localStorage.getItem("plate_entries_today");
       const arr = raw ? JSON.parse(raw) : [];
-
-      // Run OCR sequentially on variants and pick best candidate
-      setStatus("Running OCR variants...");
       let bestCandidates = [];
 
-      for (const dataUrl of variants) {
+      for (const vDataUrl of variants) {
         try {
-          // small delay to reduce worker thrash
-          await sleep(100);
-          // try with psm 7 first, then psm 8 if no good result
+          await sleep(100); // small throttle
           let ocrResult = null;
+          // try psm 7 first
           try {
             await worker.setParameters({ tessedit_pageseg_mode: "7" });
-            ocrResult = await worker.recognize(dataUrl);
+            ocrResult = await worker.recognize(vDataUrl);
           } catch (e) {
-            console.warn("psm7 failed", e);
+            // ignore
           }
+          // fallback psm 8
           if (!ocrResult || !ocrResult.data || !ocrResult.data.text || !ocrResult.data.text.trim()) {
             try {
               await worker.setParameters({ tessedit_pageseg_mode: "8" });
-              ocrResult = await worker.recognize(dataUrl);
+              ocrResult = await worker.recognize(vDataUrl);
             } catch (e) {
-              console.warn("psm8 failed", e);
+              // ignore
             }
           }
           const data = ocrResult ? ocrResult.data : {};
           const text = (data && data.text) ? data.text : "";
           const words = (data && data.words) ? data.words : [];
 
-          // Build tokens from words by horizontal merge
+          // Merge words into tokens
           const mergedTokens = mergeWordsToTokens(words, 30);
-
-          // Helper scoring
+          // Score tokens
           const scoreToken = (tok, baseConf = 40) => {
             const norm = normalizePlateToken(tok);
             if (!norm) return { plate: "", score: 0 };
-            let score = Math.max(0, Math.min(100, baseConf));
+            let score = Math.max(0, Math.min(100, baseConf || 40));
             const hasLetters = /[A-Z]/.test(norm);
             const hasDigits = /[0-9]/.test(norm);
             if (hasLetters && hasDigits) score += 20;
             if (PLATE_RE.test(norm)) score += 40;
-            // slight length boost
             score += Math.min(20, Math.max(0, norm.length - 6) * 2);
             return { plate: norm, score };
           };
 
-          // candidates from merged tokens
           for (const mt of mergedTokens) {
-            const sc = scoreToken(mt.text, mt.avgConf || 0);
+            const sc = scoreToken(mt.text, mt.avgConf || 40);
             if (sc.plate.length >= MIN_TOKEN_LEN) bestCandidates.push(sc);
           }
-          // candidates from full text
-          const candsFromText = extractPlateCandidates(text);
+          const candsFromText = extractPlateCandidatesFromText(text);
           for (const t of candsFromText) {
             const sc = scoreToken(t, 40);
             if (sc.plate.length >= MIN_TOKEN_LEN) bestCandidates.push(sc);
           }
 
           if (DEBUG) {
-            try {
-              console.debug("OCR words:", words);
-              console.debug("Candidates:", bestCandidates);
-            } catch (_) {}
+            try { console.debug("OCR words:", words); console.debug("Candidates raw:", bestCandidates); } catch (_) {}
           }
 
-          // quick accept strict regex with decent score
+          // quick accept strict high-score
           const strict = bestCandidates.find(x => PLATE_RE.test(x.plate) && x.score >= 60);
           if (strict) {
             const seenRecently = arr.some(e => e.plate === strict.plate && (ts - e.ts) < DUPLICATE_WINDOW_MS);
             if (!seenRecently) {
-              arr.push({ plate: strict.plate, ts, image: dataUrl });
+              arr.push({ plate: strict.plate, ts, image: vDataUrl });
               localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
               setTodayList(arr.slice(-MAX_ENTRIES));
               setStatus(`Detected: ${strict.plate}`);
@@ -498,11 +471,10 @@ const roiH = Math.floor(procH * 0.25);
         } catch (err) {
           console.error("OCR variant error:", err);
         }
-      }
+      } // end variants loop
 
-      // If no strict match, pick highest scored candidate overall
+      // pick best overall if no strict match
       if (bestCandidates.length > 0) {
-        // dedupe by plate and pick max score
         const map = new Map();
         for (const c of bestCandidates) {
           const p = c.plate;
@@ -511,13 +483,11 @@ const roiH = Math.floor(procH * 0.25);
         const list = Array.from(map.entries()).map(([plate, score]) => ({ plate, score }));
         list.sort((a, b) => b.score - a.score);
         const pick = list[0];
-        // prefer letters+digits token if close in score
         const alt = list.find(x => /[A-Z]/.test(x.plate) && /[0-9]/.test(x.plate));
         const chosen = (!pick ? null : (/[A-Z]/.test(pick.plate) && /[0-9]/.test(pick.plate)) ? pick : (alt && (pick.score - alt.score) <= 10 ? alt : pick));
         if (chosen && chosen.score >= 50 && chosen.plate.length >= MIN_TOKEN_LEN) {
           const seenRecently = arr.some(e => e.plate === chosen.plate && (ts - e.ts) < DUPLICATE_WINDOW_MS);
           if (!seenRecently) {
-            // Use first variant image as snapshot if available
             const snapshot = variants.length ? variants[0] : null;
             arr.push({ plate: chosen.plate, ts, image: snapshot });
             localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
@@ -529,22 +499,21 @@ const roiH = Math.floor(procH * 0.25);
         } else {
           const top3 = list.slice(0, 3).map(x => `${x.plate}(${Math.round(x.score)})`).join(", ");
           setStatus(`No confident plate. Candidates: ${top3 || "-"}`);
-          if (DEBUG) {
-            try { console.debug("Candidates ranked:", list.slice(0, 10)); } catch (_) {}
-          }
+          if (DEBUG) { try { console.debug("Candidates ranked:", list.slice(0, 10)); } catch (_) {} }
         }
       } else {
         setStatus("No plate found in frame");
       }
+
     } catch (err) {
-      console.error("captureAndDetect error:", err);
+      console.error("detect err", err);
       setStatus("Detect error: " + (err.message || err.name));
     } finally {
       captureBusyRef.current = false;
     }
-  };
+  }; // end captureAndDetect
 
-  // Detection loop using requestAnimationFrame and serialized captures
+  // Detection loop using requestAnimationFrame + delay
   const startDetect = async () => {
     if (!runningCamera) {
       alert("Please start camera first");
@@ -557,8 +526,8 @@ const roiH = Math.floor(procH * 0.25);
     if (runningDetect) return;
     setRunningDetect(true);
     setStatus("Detection starting...");
-    // after ensuring camera and worker ready, wait a bit to let camera autofocus
-    await sleep(600); // 600ms delay before first capture
+    // small autofocus delay
+    await sleep(600);
     setStatus("Detection started (loop)");
     const loop = async () => {
       try {
@@ -566,24 +535,19 @@ const roiH = Math.floor(procH * 0.25);
       } catch (e) {
         console.warn("Loop capture failed:", e);
       }
-      // Wait a bit (tunable) between attempts to avoid CPU hogging
       await sleep(CAPTURE_INTERVAL_MS);
       if (runningDetect) {
-        rafIdRef.current = requestAnimationFrame(loop);
+        rafRef.current = requestAnimationFrame(loop);
       }
     };
-    rafIdRef.current = requestAnimationFrame(loop);
+    rafRef.current = requestAnimationFrame(loop);
   };
 
   const stopDetect = () => {
     setRunningDetect(false);
-    if (rafIdRef.current) {
-      try {
-        cancelAnimationFrame(rafIdRef.current);
-      } catch (e) {
-        // ignore
-      }
-      rafIdRef.current = null;
+    if (rafRef.current) {
+      try { cancelAnimationFrame(rafRef.current); } catch (_) {}
+      rafRef.current = null;
     }
     setStatus("Detection stopped");
   };
@@ -609,13 +573,7 @@ const roiH = Math.floor(procH * 0.25);
       <div className="tv-main">
         <div style={{ flex: 1 }}>
           <div className="tv-video-wrap">
-            <video
-              ref={videoRef}
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              muted
-              playsInline
-              autoPlay
-            />
+            <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted playsInline autoPlay />
           </div>
           <div className="tv-status" style={{ color: runningDetect ? "green" : "#666" }}>
             Status: {status}
@@ -623,37 +581,24 @@ const roiH = Math.floor(procH * 0.25);
         </div>
 
         <div className="tv-side">
-          <h4>
-            Today's total: <span style={{ color: "green" }}>{todayList.length}</span>
-          </h4>
-
+          <h4>Today's total: <span style={{ color: "green" }}>{todayList.length}</span></h4>
           <div className="tv-list">
             {todayList.length === 0 ? (
               <div style={{ color: "#666" }}>No entries yet.</div>
             ) : (
-              todayList
-                .slice()
-                .reverse()
-                .map((it, idx) => (
-                  <div key={idx} className="tv-card">
-                    <div style={{ fontWeight: 700 }}>{it.plate}</div>
-                    <div style={{ fontSize: 12, color: "#555" }}>{new Date(it.ts).toLocaleString()}</div>
-                    <div style={{ marginTop: 8 }}>
-                      {it.image ? (
-                        <img
-                          src={it.image}
-                          alt="snap"
-                          style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }}
-                        />
-                      ) : null}
-                    </div>
+              todayList.slice().reverse().map((it, idx) => (
+                <div key={idx} className="tv-card">
+                  <div style={{ fontWeight: 700 }}>{it.plate}</div>
+                  <div style={{ fontSize: 12, color: "#555" }}>{new Date(it.ts).toLocaleString()}</div>
+                  <div style={{ marginTop: 8 }}>
+                    {it.image ? <img src={it.image} alt="snap" style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 4 }} /> : null}
                   </div>
-                ))
+                </div>
+              ))
             )}
           </div>
         </div>
       </div>
-      {/* hidden processing canvas */}
       <canvas ref={procCanvasRef} style={{ display: "none" }} />
     </div>
   );
