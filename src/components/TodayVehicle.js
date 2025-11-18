@@ -18,6 +18,8 @@ const TodayVehicle = () => {
   const SIGMOID_ALPHA = 8.0; // preprocessing contrast
   const MIN_TOKEN_LEN = 3;
   const MAX_ENTRIES = 500;
+  const DUPLICATE_WINDOW_MS = 4000; // 3–5s duplicate suppression window
+  const DEBUG = false; // toggle to print debug logs
 
   // Busy / RAF refs to avoid overlapping work
   const captureBusyRef = useRef(false);
@@ -183,6 +185,44 @@ const TodayVehicle = () => {
   };
 
   const PLATE_RE = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$/;
+
+  // Merge horizontally adjacent words into tokens using bbox positions
+  const mergeWordsToTokens = (words, gapPx = 30) => {
+    if (!Array.isArray(words) || words.length === 0) return [];
+    const items = words
+      .filter(w => w && w.text)
+      .map(w => {
+        const b = w.bbox || w.box || {};
+        const x0 = b.x0 ?? b.left ?? 0;
+        const x1 = b.x1 ?? b.right ?? (x0 + (w.text.length * 8));
+        const conf = w.confidence ?? w.conf ?? 0;
+        return { text: w.text, x0, x1, conf };
+      })
+      .sort((a, b) => a.x0 - b.x0);
+    const tokens = [];
+    let cur = null;
+    for (const it of items) {
+      if (!cur) {
+        cur = { text: it.text, x0: it.x0, x1: it.x1, confs: [it.conf] };
+        continue;
+      }
+      const gap = Math.max(0, it.x0 - cur.x1);
+      if (gap <= gapPx) {
+        cur.text += it.text; // merge adjacent
+        cur.x1 = Math.max(cur.x1, it.x1);
+        cur.confs.push(it.conf);
+      } else {
+        const avg = cur.confs.reduce((a, b) => a + b, 0) / cur.confs.length;
+        tokens.push({ text: cur.text, avgConf: avg });
+        cur = { text: it.text, x0: it.x0, x1: it.x1, confs: [it.conf] };
+      }
+    }
+    if (cur) {
+      const avg = cur.confs.reduce((a, b) => a + b, 0) / cur.confs.length;
+      tokens.push({ text: cur.text, avgConf: avg });
+    }
+    return tokens;
+  };
 
   const extractPlateCandidates = (text) => {
     if (!text) return [];
@@ -403,26 +443,47 @@ const roiH = Math.floor(procH * 0.25);
           const data = ocrResult ? ocrResult.data : {};
           const text = (data && data.text) ? data.text : "";
           const words = (data && data.words) ? data.words : [];
+
+          // Build tokens from words by horizontal merge
+          const mergedTokens = mergeWordsToTokens(words, 30);
+
+          // Helper scoring
+          const scoreToken = (tok, baseConf = 40) => {
+            const norm = normalizePlateToken(tok);
+            if (!norm) return { plate: "", score: 0 };
+            let score = Math.max(0, Math.min(100, baseConf));
+            const hasLetters = /[A-Z]/.test(norm);
+            const hasDigits = /[0-9]/.test(norm);
+            if (hasLetters && hasDigits) score += 20;
+            if (PLATE_RE.test(norm)) score += 40;
+            // slight length boost
+            score += Math.min(20, Math.max(0, norm.length - 6) * 2);
+            return { plate: norm, score };
+          };
+
+          // candidates from merged tokens
+          for (const mt of mergedTokens) {
+            const sc = scoreToken(mt.text, mt.avgConf || 0);
+            if (sc.plate.length >= MIN_TOKEN_LEN) bestCandidates.push(sc);
+          }
           // candidates from full text
           const candsFromText = extractPlateCandidates(text);
           for (const t of candsFromText) {
-            bestCandidates.push({ plate: t, score: 40 }); // base score
+            const sc = scoreToken(t, 40);
+            if (sc.plate.length >= MIN_TOKEN_LEN) bestCandidates.push(sc);
           }
-          // also use words with confidences
-          for (const w of words) {
-            if (!w || !w.text) continue;
-            const norm = normalizePlateToken(w.text || "");
-            const conf = w.confidence || 0;
-            if (norm && norm.length >= MIN_TOKEN_LEN) {
-              // larger plates get slight boost
-              const lenBoost = Math.min(20, norm.length * 2);
-              bestCandidates.push({ plate: norm, score: conf + lenBoost });
-            }
+
+          if (DEBUG) {
+            try {
+              console.debug("OCR words:", words);
+              console.debug("Candidates:", bestCandidates);
+            } catch (_) {}
           }
+
           // quick accept strict regex with decent score
-          const strict = bestCandidates.find(x => PLATE_RE.test(x.plate) && x.score >= 40);
+          const strict = bestCandidates.find(x => PLATE_RE.test(x.plate) && x.score >= 60);
           if (strict) {
-            const seenRecently = arr.some(e => e.plate === strict.plate && (ts - e.ts) < 30_000);
+            const seenRecently = arr.some(e => e.plate === strict.plate && (ts - e.ts) < DUPLICATE_WINDOW_MS);
             if (!seenRecently) {
               arr.push({ plate: strict.plate, ts, image: dataUrl });
               localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
@@ -450,20 +511,27 @@ const roiH = Math.floor(procH * 0.25);
         const list = Array.from(map.entries()).map(([plate, score]) => ({ plate, score }));
         list.sort((a, b) => b.score - a.score);
         const pick = list[0];
-        if (pick && pick.score > 45 && pick.plate.length >= MIN_TOKEN_LEN) {
-          const seenRecently = arr.some(e => e.plate === pick.plate && (ts - e.ts) < 30_000);
+        // prefer letters+digits token if close in score
+        const alt = list.find(x => /[A-Z]/.test(x.plate) && /[0-9]/.test(x.plate));
+        const chosen = (!pick ? null : (/[A-Z]/.test(pick.plate) && /[0-9]/.test(pick.plate)) ? pick : (alt && (pick.score - alt.score) <= 10 ? alt : pick));
+        if (chosen && chosen.score >= 50 && chosen.plate.length >= MIN_TOKEN_LEN) {
+          const seenRecently = arr.some(e => e.plate === chosen.plate && (ts - e.ts) < DUPLICATE_WINDOW_MS);
           if (!seenRecently) {
             // Use first variant image as snapshot if available
             const snapshot = variants.length ? variants[0] : null;
-            arr.push({ plate: pick.plate, ts, image: snapshot });
+            arr.push({ plate: chosen.plate, ts, image: snapshot });
             localStorage.setItem("plate_entries_today", JSON.stringify(arr.slice(-MAX_ENTRIES)));
             setTodayList(arr.slice(-MAX_ENTRIES));
-            setStatus(`Detected (best): ${pick.plate}`);
+            setStatus(`Detected (best): ${chosen.plate}`);
           } else {
-            setStatus(`Detected (recent best): ${pick.plate}`);
+            setStatus(`Detected (recent best): ${chosen.plate}`);
           }
         } else {
-          setStatus("No confident plate found");
+          const top3 = list.slice(0, 3).map(x => `${x.plate}(${Math.round(x.score)})`).join(", ");
+          setStatus(`No confident plate. Candidates: ${top3 || "-"}`);
+          if (DEBUG) {
+            try { console.debug("Candidates ranked:", list.slice(0, 10)); } catch (_) {}
+          }
         }
       } else {
         setStatus("No plate found in frame");
